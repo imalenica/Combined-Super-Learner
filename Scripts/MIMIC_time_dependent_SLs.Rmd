@@ -1,0 +1,228 @@
+---
+title: "Combined SL vs Regular SL over time"
+output: pdf_document
+---
+
+```{r}
+### Goal(s):
+# This simple version of SuperLearner 
+# Global learner will fit towards the "group prediction"
+# Individual learner will fit towards the "individual prediction"
+# Allow for few learners to smooth or stratify over the baseline covariates
+```
+
+```{r}
+#Load necessary libraries:
+library(sl3)
+library(origami)
+library(lsei)
+library(here)
+library(SuperLearner)
+library(dplyr)
+require(rlist)
+source(here("R/CombinedOnlineSL.R"))
+```
+
+```{r,echo=FALSE}
+#There are 1276 subjects
+
+#Load the data:
+data<-load(here("Data/data.Rdata"))
+
+#Pick 500 samples that have period 1,2 3, 4 and 5:
+train_all_p1 <- df[df$periode==1,]
+train_all_p2 <- df[df$periode==2,]
+train_all_p3 <- df[df$periode==3,]
+train_all_p4 <- df[df$periode==4,]
+train_all_p5 <- df[df$periode==5,]
+samples_intersect<-intersect(train_all_p1$subject_id,train_all_p2$subject_id)
+samples_intersect<-intersect(samples_intersect,train_all_p3$subject_id)
+samples_intersect<-intersect(samples_intersect,train_all_p4$subject_id)
+samples_intersect<-intersect(samples_intersect,train_all_p5$subject_id)
+
+#For now, subset to 1000 samples:
+samples<-sample(samples_intersect,1000)
+train_all_p1<-train_all_p1[train_all_p1$subject_id %in% samples,]
+train_all_p2<-train_all_p2[train_all_p2$subject_id %in% samples,]
+train_all_p3<-train_all_p3[train_all_p3$subject_id %in% samples,]
+train_all_p4<-train_all_p4[train_all_p4$subject_id %in% samples,]
+train_all_p5<-train_all_p5[train_all_p5$subject_id %in% samples,]
+train_all<-rbind.data.frame(train_all_p1,train_all_p2,train_all_p3,
+                            train_all_p4,train_all_p5)
+train_all <- train_all %>% group_by(subject_id) %>% arrange(time,.by_group = TRUE) %>% arrange(periode,.by_group = TRUE) 
+#PROBLEM: some samples are repeated?
+train_all <- train_all %>% distinct(subject_id, time, periode, .keep_all = TRUE)
+
+#Set time to be continuous
+train_all <- train_all %>% group_by(subject_id) %>% mutate(time = 1:300)
+
+#PROBLEM: How to deal with missing values?
+#NAs: sapsi_first,sofa_first, bmi, los_hospital
+summary(train_all)
+train_all <- train_all[,-c(2,6,7,8,10,12)]
+
+#Convert character to numeric:
+#gender, admission_type_descr
+train_all$gender <- ifelse(train_all$gender=="M",1,0)
+train_all$Y<-rep(0,nrow(train_all))
+train_all$Y2<-rep(0,nrow(train_all))
+```
+
+```{r}
+
+#######################################
+# Define a new outcome (old one is suspicious)
+#######################################
+
+## Solution 1
+#Try a different definition:
+
+window<-5
+cutoff<-62
+
+#TO DO: remove "islands"
+for(i in unique(train_all$subject_id)){
+  
+  sub<-train_all[train_all$subject_id==i,]
+
+  init <- ifelse(sub[,"abpmean"] < cutoff,1,0)
+  
+  #Sum the lags around each possible event. 
+  lags<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lag(init,x))), na.rm = TRUE)
+  leads<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lead(init,x))), na.rm = TRUE)
+  mids<-lags+leads
+  
+  event<-ifelse((init==1 & mids >= 5),1,0)
+  #test<-cbind.data.frame(init,lags,leads,mids,event)
+  train_all[train_all$subject_id==i,"Y"]<-event
+  }
+  
+}
+
+## Solution 2
+
+# Acute Hypothensive Episode (AHE) is a period of WINDOW minutes 
+# during which at least 80% of the MAP measurements are 
+# no greater than CUTOFF.
+
+for(i in unique(train_all$subject_id)){
+  
+  sub<-train_all[train_all$subject_id==i,]
+  t<-dim(sub)[1]
+  windows <- seq(from = 1, to=t-window, by=window+1)
+
+  for(j in windows){
+    
+    #Look at the "window"" minute interval:
+    init<-ifelse(sub[(j:(j+window)),"abpmean"] < cutoff,1,0)
+    
+    if(sum(init)>(0.90*window)){
+      sub[(j:(j+window)),"Y2"]<-data.frame(rep(1,length(init)))
+    }else{
+      sub[(j:(j+window)),"Y2"]<-data.frame(rep(0,length(init)))
+    }
+  }
+  
+  #sub[is.na(sub$Y),"Y"]<-ifelse(sub[is.na(sub$Y),"abpmean"]<cutoff,1,0)
+  #Too short to be an episode- even if < cutoff
+  sub[is.na(sub$Y),"Y2"]<-0
+  train_all[train_all$subject_id==i,]<-sub
+}
+
+#Redefine EVENT as "Y" (use the new definition of the outcome):
+train_all<-train_all[,-c(16,18)]
+names(train_all)[16]<-"event"
+```
+
+```{r}
+
+#######################################
+# Set the SL libraries
+#######################################
+
+### Learners as is:
+#Create a grid for xgboost:
+grid_params = list(nrounds = c(100, 500),
+                   eta = c(0.001, 0.01, 0.1))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+  })
+
+lrnr_glmnet <- make_learner(Lrnr_glmnet)
+lrnr_glm <- Lrnr_glm_fast$new()
+
+# A stack combines multiple learners by training them simultaneously
+# their predictions can be either combined, or compared.
+stack <- make_learner(
+  Stack, lrnr_glm, xgb_learners[[1]], xgb_learners[[2]], xgb_learners[[3]],
+  xgb_learners[[4]], xgb_learners[[5]], xgb_learners[[6]]
+)
+
+### Learners with screeners:
+screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
+cor_pipeline <- make_learner(Pipeline, screen_cor, stack)
+stack_screen <- make_learner(Stack, cor_pipeline, stack)
+
+###Regular Super-Learner option:
+metalearner <- make_learner(Lrnr_nnls)
+sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
+
+#Specify the covariates and outcome:
+outcome <- "event"
+covars_wbaseline <- c("gender","age","care_unit",
+                      "los_icu","amine","sedation","ventilation","spo2","abpsys",
+                      "abpdias","abpmean")
+covars <- c("los_icu","amine","sedation","ventilation","spo2","abpsys","abpdias","abpmean")
+
+```
+
+```{r, echo=FALSE}
+
+#Smallest time window we consider:
+t1<-20
+#Largest time window we consider:
+t2<-240
+#How many minutes in the future the prediction occurs?
+h<-30
+#Gap between training and prediction.
+#Note that at hour marks, there is a natural 30 minute gap. 
+#But if we train at 20 minutes, there is not. 
+gap=0
+#Number of learners
+lrn<-7
+
+#Size of the initial training set:
+first_window=10
+#Size of the test set:
+test_size=10
+#Increase the size of the training set by this ammount:
+mini_batch=5
+
+#######################################
+## Compare SL weights at different t
+
+##Quick solution for the abstract!
+
+#Get all the individual samples:
+samples <- unique(train_all$subject_id)
+res_t20<-combine_SL(t=20,h=h,gap=30,train_all,first_window,test_size,mini_batch)
+res_t30<-combine_SL(t=30,h=h,gap=30,train_all,first_window,test_size,mini_batch)
+res_t60<-combine_SL(t=60,h=h,gap=0,train_all,first_window,test_size,mini_batch)
+res_t90<-combine_SL(t=90,h=h,gap=30,train_all,first_window,test_size,mini_batch)
+res_t120<-combine_SL(t=120,h=h,gap=0,train_all,first_window,test_size,mini_batch)
+res_t150<-combine_SL(t=150,h=h,gap=30,train_all,first_window,test_size,mini_batch)
+res_t180<-combine_SL(t=180,h=h,gap=0,train_all,first_window,test_size,mini_batch)
+res_t240<-combine_SL(t=240,h=h,gap=0,train_all,first_window,test_size,mini_batch)
+
+list.save(res_t20, here("Results/TimeStep_t20.Rdata"))
+list.save(res_t30, here("Results/TimeStep_t30.Rdata"))
+list.save(res_t60, here("Results/TimeStep_t60.Rdata"))
+list.save(res_t90, here("Results/TimeStep_t90.Rdata"))
+list.save(res_t120, here("Results/TimeStep_t120.Rdata"))
+list.save(res_t150, here("Results/TimeStep_t150.Rdata"))
+list.save(res_t180, here("Results/TimeStep_t180.Rdata"))
+list.save(res_t240, here("Results/TimeStep_t240.Rdata"))
+
+```
