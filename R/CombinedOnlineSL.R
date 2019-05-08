@@ -109,7 +109,7 @@ individual_SL = function(t,id,first_window,test_size,mini_batch){
 #It will train the Global SL with and without baseline covariates, and with and without screeners.
 #This effectively mimics various level of smoothing over baseline covariates.
 #In addition, the Combined Online SL also uses the Individual SL, which learns only from the sample we try to optimize over.
-#We look the performance over all individual samples- meaning that we have n different weights generated.
+#We look at the performance over all individual samples- meaning that we have n different weights generated.
 #Note that this means that our Global SL will use the same function over all n samples, 
 #whereas the Individual SL will use different functions over all n samples.
 #Loss generated is a sum over all the samples, evaluated only over validation time points.
