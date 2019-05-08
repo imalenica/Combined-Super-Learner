@@ -20,8 +20,8 @@ library(here)
 library(SuperLearner)
 library(dplyr)
 require(rlist)
-source(here("R/CombinedOnlineSL.R"))
-source(here("R/utils_mimic.R"))
+source(here::here("R/CombinedOnlineSL.R"))
+source(here::here("R/utils_mimic.R"))
 ```
 
 ```{r,echo=FALSE}
@@ -32,7 +32,7 @@ source(here("R/utils_mimic.R"))
 
 #Load the data:
 #(there are 1276 subjects)
-data<-load(here("Data/data.Rdata"))
+data<-load(here::here("Data/data.Rdata"))
 
 #Pick 500 samples that have period 1,2 3, 4 and 5:
 train_all <- sample_n_t(df, n = 500, t=5)
