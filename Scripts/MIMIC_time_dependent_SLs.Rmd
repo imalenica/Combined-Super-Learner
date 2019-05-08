@@ -21,40 +21,21 @@ library(SuperLearner)
 library(dplyr)
 require(rlist)
 source(here("R/CombinedOnlineSL.R"))
+source(here("R/utils_mimic.R"))
 ```
 
 ```{r,echo=FALSE}
-#There are 1276 subjects
+
+#######################################
+# Data processing
+#######################################
 
 #Load the data:
+#(there are 1276 subjects)
 data<-load(here("Data/data.Rdata"))
 
 #Pick 500 samples that have period 1,2 3, 4 and 5:
-train_all_p1 <- df[df$periode==1,]
-train_all_p2 <- df[df$periode==2,]
-train_all_p3 <- df[df$periode==3,]
-train_all_p4 <- df[df$periode==4,]
-train_all_p5 <- df[df$periode==5,]
-samples_intersect<-intersect(train_all_p1$subject_id,train_all_p2$subject_id)
-samples_intersect<-intersect(samples_intersect,train_all_p3$subject_id)
-samples_intersect<-intersect(samples_intersect,train_all_p4$subject_id)
-samples_intersect<-intersect(samples_intersect,train_all_p5$subject_id)
-
-#For now, subset to 1000 samples:
-samples<-sample(samples_intersect,1000)
-train_all_p1<-train_all_p1[train_all_p1$subject_id %in% samples,]
-train_all_p2<-train_all_p2[train_all_p2$subject_id %in% samples,]
-train_all_p3<-train_all_p3[train_all_p3$subject_id %in% samples,]
-train_all_p4<-train_all_p4[train_all_p4$subject_id %in% samples,]
-train_all_p5<-train_all_p5[train_all_p5$subject_id %in% samples,]
-train_all<-rbind.data.frame(train_all_p1,train_all_p2,train_all_p3,
-                            train_all_p4,train_all_p5)
-train_all <- train_all %>% group_by(subject_id) %>% arrange(time,.by_group = TRUE) %>% arrange(periode,.by_group = TRUE) 
-#PROBLEM: some samples are repeated?
-train_all <- train_all %>% distinct(subject_id, time, periode, .keep_all = TRUE)
-
-#Set time to be continuous
-train_all <- train_all %>% group_by(subject_id) %>% mutate(time = 1:300)
+train_all <- sample_n_t(df, n = 500, t=5)
 
 #PROBLEM: How to deal with missing values?
 #NAs: sapsi_first,sofa_first, bmi, los_hospital
@@ -64,8 +45,13 @@ train_all <- train_all[,-c(2,6,7,8,10,12)]
 #Convert character to numeric:
 #gender, admission_type_descr
 train_all$gender <- ifelse(train_all$gender=="M",1,0)
-train_all$Y<-rep(0,nrow(train_all))
-train_all$Y2<-rep(0,nrow(train_all))
+
+#Specify the covariates and outcome:
+outcome <- "event"
+covars_wbaseline <- c("gender","age","care_unit",
+                      "los_icu","amine","sedation","ventilation","spo2","abpsys",
+                      "abpdias","abpmean")
+covars <- c("los_icu","amine","sedation","ventilation","spo2","abpsys","abpdias","abpmean")
 ```
 
 ```{r}
@@ -74,64 +60,11 @@ train_all$Y2<-rep(0,nrow(train_all))
 # Define a new outcome (old one is suspicious)
 #######################################
 
-## Solution 1
-#Try a different definition:
+train_all <- new_Y_sol1(train_all = train_all)
+train_all <- new_Y_sol2(train_all = train_all)
 
-window<-5
-cutoff<-62
-
-#TO DO: remove "islands"
-for(i in unique(train_all$subject_id)){
-  
-  sub<-train_all[train_all$subject_id==i,]
-
-  init <- ifelse(sub[,"abpmean"] < cutoff,1,0)
-  
-  #Sum the lags around each possible event. 
-  lags<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lag(init,x))), na.rm = TRUE)
-  leads<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lead(init,x))), na.rm = TRUE)
-  mids<-lags+leads
-  
-  event<-ifelse((init==1 & mids >= 5),1,0)
-  #test<-cbind.data.frame(init,lags,leads,mids,event)
-  train_all[train_all$subject_id==i,"Y"]<-event
-  }
-  
-}
-
-## Solution 2
-
-# Acute Hypothensive Episode (AHE) is a period of WINDOW minutes 
-# during which at least 80% of the MAP measurements are 
-# no greater than CUTOFF.
-
-for(i in unique(train_all$subject_id)){
-  
-  sub<-train_all[train_all$subject_id==i,]
-  t<-dim(sub)[1]
-  windows <- seq(from = 1, to=t-window, by=window+1)
-
-  for(j in windows){
-    
-    #Look at the "window"" minute interval:
-    init<-ifelse(sub[(j:(j+window)),"abpmean"] < cutoff,1,0)
-    
-    if(sum(init)>(0.90*window)){
-      sub[(j:(j+window)),"Y2"]<-data.frame(rep(1,length(init)))
-    }else{
-      sub[(j:(j+window)),"Y2"]<-data.frame(rep(0,length(init)))
-    }
-  }
-  
-  #sub[is.na(sub$Y),"Y"]<-ifelse(sub[is.na(sub$Y),"abpmean"]<cutoff,1,0)
-  #Too short to be an episode- even if < cutoff
-  sub[is.na(sub$Y),"Y2"]<-0
-  train_all[train_all$subject_id==i,]<-sub
-}
-
-#Redefine EVENT as "Y" (use the new definition of the outcome):
-train_all<-train_all[,-c(16,18)]
-names(train_all)[16]<-"event"
+#Redefine EVENT as "Y1" (use the new definition of the outcome):
+outcome <- "Y1"
 ```
 
 ```{r}
@@ -168,13 +101,6 @@ stack_screen <- make_learner(Stack, cor_pipeline, stack)
 ###Regular Super-Learner option:
 metalearner <- make_learner(Lrnr_nnls)
 sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
-
-#Specify the covariates and outcome:
-outcome <- "event"
-covars_wbaseline <- c("gender","age","care_unit",
-                      "los_icu","amine","sedation","ventilation","spo2","abpsys",
-                      "abpdias","abpmean")
-covars <- c("los_icu","amine","sedation","ventilation","spo2","abpsys","abpdias","abpmean")
 
 ```
 
