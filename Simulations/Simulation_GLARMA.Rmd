@@ -21,6 +21,10 @@ data<-load(here::here("Data/data.Rdata"))
 train_all <- sample_n_t(df, n = 500, t=5)
 samples<-unique(train_all$subject_id)
 
+#Samples that EVER had event:
+sample_event<-train_all %>% group_by(subject_id) %>% summarise(Frequency = sum(Y1))  %>%
+  mutate(Event = ifelse(Frequency > 0, 1,0))
+
 #PROBLEM: How to deal with missing values?
 #NAs: sapsi_first,sofa_first, bmi, los_hospital
 summary(train_all)
@@ -56,9 +60,22 @@ for(i in samples){
   counter<-counter+1
 }
 
+#If model can't be estimated, specify:
+fit_coef<-lapply(fit_coef, function(x) if(identical(x, numeric(0))){x<-"No model"}else{x})
 fit_coef_all<-do.call("rbind.fill", lapply(fit_coef, function(x) data.frame(as.list(x))))
-write.csv(fit_coef_all, here::here("Results/ARIMA_fits_n500.csv"))
+#Add sample names and if ever event happened
+fit_coef_all<-cbind.data.frame(sample_event,past=rowSums(!is.na(fit_coef_all)),fit_coef_all)
+#How many samples with AR and MA terms?
+fit_coef_all$ar<-rowSums(!is.na(fit_coef_all[,grep("ar",names(fit_coef_all))]))
+fit_coef_all$ma<-rowSums(!is.na(fit_coef_all[,grep("ma",names(fit_coef_all))]))
+write.csv(fit_coef_all, here::here("Results/ARIMA_fits_n500.csv"), quote = FALSE, row.names = FALSE)
 
+#Are there differences in the length of past relevant if you had event/did not have event?
+fit_coef_all %>% group_by(Event) %>% summarise_at(vars(past), funs(mean(., na.rm=TRUE)))
+fit_coef_all %>% group_by(Event) %>% summarise_at(vars(ar), funs(mean(., na.rm=TRUE)))
+fit_coef_all %>% group_by(Event) %>% summarise_at(vars(ma), funs(mean(., na.rm=TRUE)))
+
+ 
 ### Model with glarma
 Y<-cbind.data.frame(Y1=train_all$Y1,Y0=1-train_all$Y1)
 #X<-data.frame(Intcpt=rep(1,nrow(train_all)), train_all[,covars])
