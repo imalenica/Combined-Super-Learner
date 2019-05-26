@@ -7,122 +7,128 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(here)
 ```
 
-In this project, we will be in a setting of multi-person multi-dimensional time 
-series. We will use an online SL and can incorporate learners which pool 
+In this project, we will be in a setting of multi-person multi-dimensional time
+series. We will use an online SL and can incorporate learners which pool
 across subjects and individualize subjects (via more aggressive modeling of the
-effect of the baseline covariates). The online cross-validated risk is 
-individualized, but we will average across subjects because it’s a more 
-interpretable measure. 
+effect of the baseline covariates). The online cross-validated risk is
+individualized, but we will average across subjects because it’s a more
+interpretable measure.
 
 # Simulation Overview
 
-Simplistic settings which can capture the following: 
+Simplistic settings which can capture the following:
 
-* A situation where subjects are iid (baseline cov variation is null) 
-* Time series variation is very much a function of baseline covariates 
-* Time series variation is very much a function of baseline covariates that 
+* A situation where subjects are iid (baseline cov variation is null)
+* Time series variation is very much a function of baseline covariates
+* Time series variation is very much a function of baseline covariates that
 you don’t measure (unexplained heterogeneity).
 * Across time the process is stationary
-* Time is not stationary (sudden jumps) so you cannot learn from the past how 
+* Time is not stationary (sudden jumps) so you cannot learn from the past how
 much it will change in the future.
 
 **Today I simulate from relatively simplistic ARIMA models.**
 
-**Later I will model the binary or continuous MIMIC outcome data with GLARMA or ARIMA, respectively. If the GLARMA/ARIMA model seems to be suitable for modeling the MIMIC data, then I can create a simulated dataset with the fitted model.** 
+**Later I will model the binary or continuous MIMIC outcome data with GLARMA or
+ARIMA, respectively. If the GLARMA/ARIMA model seems to be suitable for modeling
+the MIMIC data, then I can create a simulated dataset with the fitted model.**
 
-# Simple ARIMA Simulations 
+# Simple ARIMA Simulations
 
 ## ARIMA Introduction
 
-An auto-regressive integrated moving average model (ARIMA) is specified by 
+An auto-regressive integrated moving average model (ARIMA) is specified by
 three order parameters: ($p, d, q$).
 
 *$p$ is the number of autoregressive terms*
-The p is the auto-regressive (AR($p$)) component and refers to the use of past 
-values in the regression equation for the series. The auto-regressive parameter 
-p specifies the number of lags used in the model. Intuitively, this would be 
-similar to stating that it is likely to be warm tomorrow if it has been warm the 
+The p is the auto-regressive (AR($p$)) component and refers to the use of past
+values in the regression equation for the series. The auto-regressive parameter
+p specifies the number of lags used in the model. Intuitively, this would be
+similar to stating that it is likely to be warm tomorrow if it has been warm the
 past $p$ days.
 
 *$d$ is the number of nonseasonal differences*
-The $d$ represents the degree of differencing in the integrated (I($d$)) 
-component. Differencing a series involves subtracting its current and previous 
-values $d$ times. Often, differencing is used to stabilize the series when the 
-stationarity assumption is not met. Intuitively, this would be similar to 
-stating that it is likely to be same temperature tomorrow if the difference in 
+The $d$ represents the degree of differencing in the integrated (I($d$))
+component. Differencing a series involves subtracting its current and previous
+values $d$ times. Often, differencing is used to stabilize the series when the
+stationarity assumption is not met. Intuitively, this would be similar to
+stating that it is likely to be same temperature tomorrow if the difference in
 temperature in the last $d$ days has been very small.
 
 *$q$ is the number of moving-averages terms*
-A moving average (MA($q$)) component represents the error of the model as a 
-combination of previous error terms, where $q$ defines the number of terms to 
+A moving average (MA($q$)) component represents the error of the model as a
+combination of previous error terms, where $q$ defines the number of terms to
 include in the model.
 
-Differencing, autoregressive, and moving average components make up a 
+Differencing, autoregressive, and moving average components make up a
 non-seasonal ARIMA model which can be written as a linear equation:
 
-$$ Y_t = c + \phi_1y_d{_{t-1}} + \phi_p y_d{_{t-p}}+...+\theta_1 e_{t-1} + 
+$$ Y_t = c + \phi_1y_d{_{t-1}} + \phi_p y_d{_{t-p}}+...+\theta_1 e_{t-1} +
 \theta_q e_{t-q} + e_t$$
 
 where $y_d$ is $Y$ differenced $d$ times and $c$ is a constant.
 
-ARIMA models can be also specified through a seasonal structure. In this case, 
-the model is specified by two sets of order parameters: $(p, d, q)$ as described 
-above and $(P, D, Q)_m$ parameters describing the seasonal component of $m$
+ARIMA models can be also specified through a seasonal structure. In this case,
+the model is specified by two sets of order parameters: $(p, d, q)$ as described
+above and $(P, D, Q)\_m$ parameters describing the seasonal component of $m$
 periods.
 
-ARIMA methodology does have its limitations. These models directly rely on past 
-values, and therefore work best on long and stable series. Also note that ARIMA 
-simply approximates historical patterns and therefore does not aim to explain 
+ARIMA methodology does have its limitations. These models directly rely on past
+values, and therefore work best on long and stable series. Also note that ARIMA
+simply approximates historical patterns and therefore does not aim to explain
 the structure of the underlying data mechanism.
 
 ### Resources
 
-* [A Short Introduction to ARIMA](https://www.datascience.com/blog/introduction-to-forecasting-with-arima-in-r-learn-data-science-tutorials)
+* [A Short Introduction to
+   ARIMA](https://www.datascience.com/blog/introduction-to-forecasting-with-arima-in-r-learn-data-science-tutorials)
 
-* [Time Series: AR, MA, ARMA, ARIMA](http://people.cs.pitt.edu/~milos/courses/cs3750/lectures/class16.pdf)
+* [Time Series: AR, MA,
+   ARMA, ARIMA](http://people.cs.pitt.edu/~milos/courses/cs3750/lectures/class16.pdf)
 
-* [Hyndman and Athanasopoulos *Forecasting: Principles and Practice*](https://otexts.com/fpp2/)
+* [Hyndman and Athanasopoulos Forecasting:
+   Principles and Practice](https://otexts.com/fpp2/)
 
-## ARIMA Simulations with White Noise 
+## ARIMA Simulations with White Noise
 
-White noise time series can be useful because the stochastic behavior of all 
-time series can be explained in terms of the white noise model. We simulate 
-Gaussian white noise, wherein $wt \sim_{iid} N(\mu,\sigma)$. $\mu$ is set 
-to 0 or a baseline covariate value and $\sigma$ is set to 1 or a baseline 
+White noise time series can be useful because the stochastic behavior of all
+time series can be explained in terms of the white noise model. We simulate
+Gaussian white noise, wherein $wt \sim_{iid} N(\mu,\sigma)$. $\mu$ is set
+to 0 or a baseline covariate value and $\sigma$ is set to 1 or a baseline
 covariate value. We consider three scenarios:
 
-1. $\mu$ is 0 and $\sigma$ is 1, the time series is a function unexplained by 
-baseline covariates. 
+1. $\mu$ is 0 and $\sigma$ is 1, the time series is a function unexplained by
+baseline covariates.
 
-2. $\mu$ depends on a baseline covariate and $\sigma$ is 1, the time series is 
+2. $\mu$ depends on a baseline covariate and $\sigma$ is 1, the time series is
 partially a function of baseline covariates.
 
-3. $\mu$ and $\sigma$ depend on a baseline covariate values, the time series 
-variation is a function of baseline covariates. 
+3. $\mu$ and $\sigma$ depend on a baseline covariate values, the time series
+variation is a function of baseline covariates.
 
 For each of the three scenarios, we simulate $N=500$ subjects each with
 $n=1000$ observations from the following models:
 
-1. An autoregressive model of order 1 ($p=1$), where each value of $y$ equals 
+1. An autoregressive model of order 1 ($p=1$), where each value of $y$ equals
 the previous value times 0.8, plus the white noise.
 
-2. A moving average of order 1 ($q=1$), where each value of $y$ equals the 
+2. A moving average of order 1 ($q=1$), where each value of $y$ equals the
 latest bit of white noise, plus 0.8 times the previous value of white noise.
 
 3. An autoregressive moving average model of order (1, 1), combining the two
-above. 
+above.
 
 4. An ARIMA(1, 1, 1) model that is the cumulative sum of the ARMA(1, 1), so
-the first difference of the time series is stationary. 
+the first difference of the time series is stationary.
 
-```{r ARIMA_sim_theta0, echo=FALSE}
+```{r sim_wt_ts-function, echo=FALSE}
 set.seed(7194)
 
 # N is the population size
 # n is the numer of observations/person
-# theta is a vector of length N 
+# theta is a vector of length N
 
 sim_wt_ts <- function(N = 500, n = 1000, mu = rep(0,500), sigma = rep(1,500)){
   wn <- matrix(ncol = N, nrow = n)
@@ -133,35 +139,35 @@ sim_wt_ts <- function(N = 500, n = 1000, mu = rep(0,500), sigma = rep(1,500)){
 
   for(i in 1:N){
     wn[,i] <- ts(rnorm(n, mean = mu[i], sd = sigma[i]))
-    
+
     # initialize the first value:
     ar1[1,i] <- ma1[1,i] <- arma11[1,i] <- wn[1,i]
-    
+
     # loop through and create the 2:nth values:
     for(j in 2:n){
       ar1[j,i] <- ar1[j - 1,i]*0.8 + wn[j,i]
       ma1[j,i] <- wn[j - 1,i]*0.8 + wn[j,i]
-      arma11[j,i] <- arma11[j - 1,i]*0.8 + wn[j - 1,i]*0.8 + wn[j,i] 
+      arma11[j,i] <- arma11[j - 1,i]*0.8 + wn[j - 1,i]*0.8 + wn[j,i]
       }
     }
-  
+
   arima111 <- apply(arma11, 2, cumsum)
 
-  # turn them into time series, and for the last two, "integrate" them via 
+  # turn them into time series, and for the last two, "integrate" them via
   # cumulative sum
   ar1 <- ts(ar1)
   ma1 <- ts(ma1)
   arma11 <- ts(arma11)
   arima111 <- ts(arima111)
-  
-  return(list(ar1 = ar1, 
-              ma1 = ma1, 
-              arma11 = arma11, 
+
+  return(list(ar1 = ar1,
+              ma1 = ma1,
+              arma11 = arma11,
               arima111 = arima111))
 }
 ```
 
-```{r}
+```{r, sim_wt_ts-run}
 # mu is 0 and sigma is 1
 wt_ts_0 <- sim_wt_ts()
 
@@ -184,7 +190,7 @@ Now we can visualize the various models.
 
 \vspace{.1in}
 
-```{r, sim_wt_ts-plots1, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+```{r, sim_wt_ts-plot-ar1, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
 plot(wt_ts_0$ar1[,1:4], main = expression(paste("AR(1): ", mu," = 0, ", sigma," = 1")))
 plot(wt_ts_W$ar1[,1:4], main = expression(paste("AR(1): ", mu," = ", phi, "(W), ", sigma," = 1")))
 plot(wt_ts_WW$ar1[,1:4], main = expression(paste("AR(1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
@@ -196,7 +202,7 @@ plot(wt_ts_WW$ar1[,1:4], main = expression(paste("AR(1): ", mu," = ", phi, "(W),
 
 \vspace{.1in}
 
-```{r, sim_wt_ts-plots2, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+```{r, sim_wt_ts-plot-ma1, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
 plot(wt_ts_0$ma1[,1:4], main = expression(paste("MA(1): ", mu," = 0, ", sigma," = 1")))
 plot(wt_ts_W$ma1[,1:4], main = expression(paste("MA(1): ", mu," = ", phi, "(W), ", sigma," = 1")))
 plot(wt_ts_WW$ma1[,1:4], main = expression(paste("MA(1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
@@ -204,11 +210,11 @@ plot(wt_ts_WW$ma1[,1:4], main = expression(paste("MA(1): ", mu," = ", phi, "(W),
 
 \pagebreak
 
-#### 3. An autoregressive moving average model of order (1, 1), combining the two above. 
+#### 3. An autoregressive moving average model of order (1, 1), combining the two above.
 
 \vspace{.1in}
 
-```{r, sim_wt_ts-plots3, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+```{r, sim_wt_ts-plot-arma11, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
 plot(wt_ts_0$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = 0, ", sigma," = 1")))
 plot(wt_ts_W$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = ", phi, "(W), ", sigma," = 1")))
 plot(wt_ts_WW$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
@@ -216,11 +222,11 @@ plot(wt_ts_WW$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = ", phi
 
 \pagebreak
 
-#### 4. An ARIMA(1, 1, 1) model that is the cumulative sum of the ARMA(1, 1), so the first difference of the time series is stationary. 
+#### 4. An ARIMA(1, 1, 1) model that is the cumulative sum of the ARMA(1, 1), so the first difference of the time series is stationary.
 
 \vspace{.1in}
 
-```{r, sim_wt_ts-plots4, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+```{r, sim_wt_ts-plot-arima111, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
 plot(wt_ts_0$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = 0, ", sigma," = 1")))
 plot(wt_ts_W$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = ", phi, "(W), ", sigma," = 1")))
 plot(wt_ts_WW$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
@@ -230,6 +236,8 @@ Simulations are based on those presented in [free range statistics](http://freer
 
 \pagebreak
 
-# MIMIC-based Simulation 
+# MIMIC-based Simulation
 
-For next time...
+```{r, mimic}
+load(here("data", "data.Rdata"))
+```
