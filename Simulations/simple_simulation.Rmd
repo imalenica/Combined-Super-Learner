@@ -237,66 +237,48 @@ Simulations are based on those presented in [free range statistics](http://freer
 
 # MIMIC-based Simulation
 
-```{r, mimic}
-library(here)
-library(tidyverse)
-load(here("Data", "data.Rdata"))
-source(here("R", "utils_mimic.R"))
+For each subject and each outcome of interest, we display of the model
+parameters and multiple measures of accuracy of the model fit: mean error
+(`ME`), root mean squared error (`RMSE`), mean absolute error (`MAE`), mean
+percentage error (`MPE`), mean absolute percentage error (`MAPE`), mean absolute
+scaled error (`MASE`) and the first-order autocorrelation coefficient (`ACF1`).
 
-df$care_unit <- ifelse(df$care_unit == 1, "MICU",
-                  ifelse(df$care_unit == 2, "SICU",
-                    ifelse(df$care_unit == 4, "CSRU",
-                      ifelse(df$care_unit == 5, "NICU",
-                        ifelse(df$care_unit == 6, "CCU", NA)))))
+Auto ARIMA takes into account the AIC and BIC values generated to determine the
+best combination of parameters. AIC (Akaike Information Criterion) and BIC
+(Bayesian Information Criterion) values are estimators to compare models.
 
-# PROBLEM: some samples are repeated?
-# first remove the rows without our outcome of interest
-new_df <- df[!with(df, is.na(abpdias) & is.na(abpsys)),]
-rs <- rowSums(is.na(new_df))
-df_ordered <- new_df[order(new_df$subject_id, new_df$time_and_date, rs), ]
-dat <- df_ordered[!duplicated(df_ordered[c('subject_id', 'time_and_date')]), ]
+We can incorporate exogenous regressors with ARMA errors where the regression
+on the exogenous regressors is done first, and then what remains is given ARIMA
+structure.
 
-# set time to be continuous
-dat <- dat %>%
-          group_by(subject_id) %>%
-            mutate(init_time_and_date = min(time_and_date)) %>%
-              mutate(min_elapsed = as.integer((time_and_date -
-                init_time_and_date) / 60)) %>%
-                mutate(time_cont = min_elapsed + 1) %>%
-
-# PROBLEM: How to deal with missing values?
-colSums(is.na(dat))
-# maybe some NA baseline values can be filled in with the non-NA baseline value
-subjects <- unique(dat$subject_id)
-list_na_control <- lapply(subjects, function(x){
-  d <- filter(dat, subject_id == x)
-  missing <- c("bmi", "sapsi_first", "sofa_first", "admission_type_descr")
-  new_cols <- lapply(missing, function(y){
-    index <- which(colnames(d) == y)
-    if(length(unique(d[,index])) == 2) {
-      lev <- which(!is.na(unique(d[,index])))
-      new_vals <- rep(unique(d[,index])[lev], nrow(d))
-      new_name <- paste0(y, "_new")
-      d <- mutate(d, new_name, new_vals)
-      index_new <- which(colnames(d) == new_name)
-      return(d[,index_new])
-    } else {
-      return(d[,index])
-    }
+```{r, autoarima, echo = FALSE}
+auto_arima <- function(df, outcome) {
+  samples <- unique(df$subject_id)
+  fit_list <- lapply(samples, function(x){
+    sub <- df[df$subject_id == x, ]
+    outcome_index <- which(colnames(sub) == outcome)
+    # covars <- data.matrix(select(sub, c(amine, ventilation, sedation)),
+    #                       rownames.force = TRUE)[,-1]
+    # cov_unique <- apply(covars, 2, function(x) length(unique(x)))
+    # covs <- which(cov_unique > 1)
+    # covs <- covars[,names(covs)]
+    fit <- forecast::auto.arima(sub[,outcome_index])
+    fit_coef <- fit$coef
+    fit_accuracy <- forecast::accuracy(fit)
+    return(c(fit_coef, fit_accuracy))
   })
-  new_dat <- do.call("cbind", new_cols)
-  new_dat <- data.frame(time_and_date = d$time_and_date, new_dat)
-  new <- merge(d, new_dat, by = "time_and_date")
-})
-
-lapply(list_na_control, function(x) grep("_new$", colnames(x)))
-
-dat <- run_class(dat,
-                cols_fac = c("subject_id", "gender", "care_unit",
-                             "admission_type_descr", "amine", "sedation",
-                             "ventilation", "event")
-                cols_num = c("periode", "time", "age", "sapsi_first",
-                             "sofa_first", "bmi", "los_icu", "los_hospital",
-                             "hr", "spo2", "abpsys", "abpdias", "abpmean"))      
-
+  names(fit_list) <- samples
+  fit_coef_all <- do.call("rbind.fill",
+  lapply(fit_list, function(x) data.frame(as.list(x))))
+  return(fit_coef_all)
+}
 ```
+
+```{r, mimic-autoarima}
+set.seed(4197)
+# sample n individuals with t hours of data
+train_all <- sample_n_t(new_dat, n = 500, t = 5)
+arima_abpmean <- auto_arima(df = train_all, outcome = "abpmean")
+arima_abpsys <- auto_arima(df = train_all, outcome = "abpsys")
+arima_abpdias <- auto_arima(df = train_all, outcome = "abpdias")
+```  
