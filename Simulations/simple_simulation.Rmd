@@ -237,48 +237,121 @@ Simulations are based on those presented in [free range statistics](http://freer
 
 # MIMIC-based Simulation
 
-For each subject and each outcome of interest, we display of the model
-parameters and multiple measures of accuracy of the model fit: mean error
-(`ME`), root mean squared error (`RMSE`), mean absolute error (`MAE`), mean
-percentage error (`MPE`), mean absolute percentage error (`MAPE`), mean absolute
-scaled error (`MASE`) and the first-order autocorrelation coefficient (`ACF1`).
+We employ the `auto.arima` function to fit the "best" ARIMA model to a
+univariate time series (i.e., each subject in the MIMIC data). In this case, the
+best model is defined as the one that has the least information loss relative to
+the true model. Information criteria (IC) are estimates of the Kullback Leibler
+information loss. The best known IC is the
+Akaike IC
+$$AIC=−2ln(l)+2k$$
+and its corrected form for small sample sizes,
+$$AICc=AIC+\frac{2k(k+1)}{N−k−1}$$
+as well as its Bayesian alternative,
+$$BIC=−2ln(l)+ln(N)\*k$$
+where $l$ is the maximum likelihood of the model, $k$ is the number of degrees
+of freedom (or independently adjusted parameters) in the model and $N$ is the
+number of observations. [Is there any reason to prefer the AIC or BIC over the
+other?](https://stats.stackexchange.com/questions/577/is-there-any-reason-to-prefer-the-aic-or-bic-over-the-other)
 
-Auto ARIMA takes into account the AIC and BIC values generated to determine the
-best combination of parameters. AIC (Akaike Information Criterion) and BIC
-(Bayesian Information Criterion) values are estimators to compare models.
+`auto.arima` selects the optimal autoregressive and moving-average orders $p$
+and $q$ based on a chosen information criterion (AICc by default) from a local
+search over a few regions of values.
 
-We can incorporate exogenous regressors with ARMA errors where the regression
-on the exogenous regressors is done first, and then what remains is given ARIMA
-structure.
+We consider the following outcomes of interest: `abpmean`, `abpsys`, and
+`abpdias`.
+
+Also, we consider time-varying covariates as exogenous regressors with ARMA
+errors. The regression on the exogenous regressors is done first, and then what
+remains is given ARIMA structure. We consider the following treatment variables:
+`amine`, `ventilation`, and `sedation`. [High-level overview of this
+regression.](https://stats.stackexchange.com/questions/198844/high-level-overview-of-auto-arima-with-xreg-predictors/198860)
+
+For each outcome of interest, we generate a table where each row corresponds to
+a subject and the columns are (1) the ARIMA model parameters and (2) multiple
+measures of accuracy of the model fit on the training and test data. The
+measures of accuracy are the mean error (`ME`), root mean squared error
+(`RMSE`), mean absolute error (`MAE`), mean percentage error (`MPE`), mean
+absolute percentage error (`MAPE`), mean absolute scaled error (`MASE`) and the
+first-order autocorrelation coefficient (`ACF1`). The training set performance
+is the in sample performance (i.e. it is computing performance using the data
+that it was fit with) and we can compare this performance to the test set.
+
+The first 80% of data is split into the training set, and last 20% into the test
+set.
 
 ```{r, autoarima, echo = FALSE}
 auto_arima <- function(df, outcome) {
+
   samples <- unique(df$subject_id)
+
+  # for each sample:
   fit_list <- lapply(samples, function(x){
+
+    # 1. subset data to only contain that sample and make sure it's in order
     sub <- df[df$subject_id == x, ]
-    outcome_index <- which(colnames(sub) == outcome)
-    # covars <- data.matrix(select(sub, c(amine, ventilation, sedation)),
-    #                       rownames.force = TRUE)[,-1]
-    # cov_unique <- apply(covars, 2, function(x) length(unique(x)))
-    # covs <- which(cov_unique > 1)
-    # covs <- covars[,names(covs)]
-    fit <- forecast::auto.arima(sub[,outcome_index])
+    sub_ord <- sub[order(sub$time_and_date), ]
+
+    # 2. split first 80% of data into training set, and last 20% into test set
+    split <- round(nrow(sub_ord) * .80)
+    training <- sub_ord[1:split, ]
+    training_outcome <- training[,which(colnames(training) == outcome)]
+    test <- sub_ord[(split + 1):nrow(sub_ord), ]
+    test_outcome <- test[, which(colnames(test) == outcome)]
+
+    # 3. consider time-varying covariates as exogenous regressors
+    covars <- data.matrix(select(training, c(amine, ventilation, sedation)),
+                          rownames.force = TRUE)
+    cov_unique <- apply(covars, 2, function(x) length(unique(x)))
+    covs <- which(cov_unique > 1)
+    covs_training <- covars[,names(covs)]
+
+    # 4. fit auto ARIMA
+    fit <- tryCatch(auto.arima(y = training_outcome, xreg = covs_training),
+           error = function(err) auto.arima(y = training_outcome))
+
+    # 5. obtain model coefficients                                          
     fit_coef <- fit$coef
-    fit_accuracy <- forecast::accuracy(fit)
-    return(c(fit_coef, fit_accuracy))
+
+    # 6. obtain measures of accuracy
+    # "multistep" forecasts are for as many time points in the test set.
+    if(is.null(fit$xreg)){
+      fit_forecast <- forecast(fit, h = nrow(test))
+    } else if(!is.null(fit$xreg)){
+      covars <- data.matrix(select(test, c(amine, ventilation, sedation)),
+                            rownames.force = TRUE)
+      covs_test <- covars[,names(covs)]
+      fit_forecast <- forecast(fit, xreg = covs_test, h = nrow(test))
+    }
+    fit_accuracy <- accuracy(fit_forecast, x = test_outcome)
+
+    # 7. make results a numeric vector (i.e., 1 row) and return them
+    accuracy_train <- fit_accuracy["Training set",]
+    names(accuracy_train) <- paste(names(accuracy_train), "train", sep = "_")
+    accuracy_test <- fit_accuracy["Test set",]
+    names(accuracy_test) <- paste(names(accuracy_test), "test", sep = "_")
+    fit_summ <- c(fit_coef, accuracy_test, accuracy_train)
+    return(fit_summ)
   })
+  # make it pretty
   names(fit_list) <- samples
-  fit_coef_all <- do.call("rbind.fill",
+  fit_all <- do.call("rbind.fill",
   lapply(fit_list, function(x) data.frame(as.list(x))))
   return(fit_coef_all)
 }
 ```
 
 ```{r, mimic-autoarima}
+library(here)
+library(forecast)
+load(here::here("Data", "mimic.Rdata"))
+
 set.seed(4197)
 # sample n individuals with t hours of data
-train_all <- sample_n_t(new_dat, n = 500, t = 5)
+train_all <- sample_n_t(mimic, n = 500, t = 5)
 arima_abpmean <- auto_arima(df = train_all, outcome = "abpmean")
 arima_abpsys <- auto_arima(df = train_all, outcome = "abpsys")
 arima_abpdias <- auto_arima(df = train_all, outcome = "abpdias")
 ```  
+
+Moving forward
+MIMIC data without the gap.
