@@ -10,8 +10,9 @@ sample_n_t = function(df,n,t){
   train_all_c <- lapply(1:t, function(x) train_all_p[[x]][train_all_p[[x]]$subject_id %in% samples,])
   train_all <- do.call("rbind", train_all_c)
 
-  train_all <- train_all %>% group_by(subject_id) %>%
-    arrange(time,.by_group = TRUE) %>% arrange(periode,.by_group = TRUE)
+  train_all <- train_all %>% dplyr::group_by(subject_id) %>%
+                dplyr::arrange(time,.by_group = TRUE) %>%
+                  dplyr::arrange(periode,.by_group = TRUE)
 
   #PROBLEM: some samples are repeated?
   train_all <- train_all %>% distinct(subject_id, time, periode, .keep_all = TRUE)
