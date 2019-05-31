@@ -1,0 +1,476 @@
+---
+title: "Time Series Simulation"
+author: "Rachael Phillips"
+date: ""
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tinytex)
+options(tinytex.verbose = TRUE)
+```
+
+In this project, we will be in a setting of multi-person multi-dimensional time
+series. We will use an online SL and can incorporate learners which pool
+across subjects and individualize subjects (via more aggressive modeling of the
+effect of the baseline covariates). The online cross-validated risk is
+individualized, but we will average across subjects because it’s a more
+interpretable measure.
+
+# Simulation Overview
+
+Simplistic settings which can capture the following:
+
+* A situation where subjects are iid (baseline cov variation is null)
+* Time series variation is very much a function of baseline covariates
+* Time series variation is very much a function of baseline covariates that
+you don’t measure (unexplained heterogeneity).
+* Across time the process is stationary
+* Time is not stationary (sudden jumps) so you cannot learn from the past how
+much it will change in the future.
+
+**Previously I simulated from relatively simplistic ARIMA models.**
+
+**Today I model the continuous MIMIC outcome data with ARIMA.**
+
+# Simple ARIMA Simulations
+
+## ARIMA Introduction
+
+An auto-regressive integrated moving average model (ARIMA) is specified by
+three order parameters: ($p, d, q$).
+
+*$p$ is the number of autoregressive terms*
+The p is the auto-regressive (AR($p$)) component and refers to the use of past
+values in the regression equation for the series. The auto-regressive parameter
+p specifies the number of lags used in the model. Intuitively, this would be
+similar to stating that it is likely to be warm tomorrow if it has been warm the
+past $p$ days.
+
+*$d$ is the number of nonseasonal differences*
+The $d$ represents the degree of differencing in the integrated (I($d$))
+component. Differencing a series involves subtracting its current and previous
+values $d$ times. Often, differencing is used to stabilize the series when the
+stationarity assumption is not met. Intuitively, this would be similar to
+stating that it is likely to be same temperature tomorrow if the difference in
+temperature in the last $d$ days has been very small.
+
+*$q$ is the number of moving-averages terms*
+A moving average (MA($q$)) component represents the error of the model as a
+combination of previous error terms, where $q$ defines the number of terms to
+include in the model.
+
+Differencing, autoregressive, and moving average components make up a
+non-seasonal ARIMA model which can be written as a linear equation:
+
+$$ Y_t = c + \phi_1y_d{_{t-1}} + \phi_p y_d{_{t-p}}+...+\theta_1 e_{t-1} +
+\theta_q e_{t-q} + e_t$$
+
+where $y_d$ is $Y$ differenced $d$ times and $c$ is a constant.
+
+ARIMA models can be also specified through a seasonal structure. In this case,
+the model is specified by two sets of order parameters: $(p, d, q)$ as described
+above and $(P, D, Q)\_m$ parameters describing the seasonal component of $m$
+periods.
+
+ARIMA methodology does have its limitations. These models directly rely on past
+values, and therefore work best on long and stable series. Also note that ARIMA
+simply approximates historical patterns and therefore does not aim to explain
+the structure of the underlying data mechanism.
+
+### Resources
+
+* [A Short Introduction to
+   ARIMA](https://www.datascience.com/blog/introduction-to-forecasting-with-arima-in-r-learn-data-science-tutorials)
+
+* [Time Series: AR, MA,
+   ARMA, ARIMA](http://people.cs.pitt.edu/~milos/courses/cs3750/lectures/class16.pdf)
+
+* [Hyndman and Athanasopoulos Forecasting:
+   Principles and Practice](https://otexts.com/fpp2/)
+
+## ARIMA Simulations with White Noise
+
+White noise time series can be useful because the stochastic behavior of all
+time series can be explained in terms of the white noise model. We simulate
+Gaussian white noise, wherein $wt \sim_{iid} N(\mu,\sigma)$. $\mu$ is set
+to 0 or a baseline covariate value and $\sigma$ is set to 1 or a baseline
+covariate value. We consider three scenarios:
+
+1. $\mu$ is 0 and $\sigma$ is 1, the time series is a function unexplained by
+baseline covariates.
+
+2. $\mu$ depends on a baseline covariate and $\sigma$ is 1, the time series is
+partially a function of baseline covariates.
+
+3. $\mu$ and $\sigma$ depend on a baseline covariate values, the time series
+variation is a function of baseline covariates.
+
+For each of the three scenarios, we simulate $N=500$ subjects each with
+$n=1000$ observations from the following models:
+
+1. An autoregressive model of order 1 ($p=1$), where each value of $y$ equals
+the previous value times 0.8, plus the white noise.
+
+2. A moving average of order 1 ($q=1$), where each value of $y$ equals the
+latest bit of white noise, plus 0.8 times the previous value of white noise.
+
+3. An autoregressive moving average model of order (1, 1), combining the two
+above.
+
+4. An ARIMA(1, 1, 1) model that is the cumulative sum of the ARMA(1, 1), so
+the first difference of the time series is stationary.
+
+```{r sim_wt_ts-function, echo=FALSE}
+set.seed(7194)
+
+# N is the population size
+# n is the numer of observations/person
+# theta is a vector of length N
+
+sim_wt_ts <- function(N = 500, n = 1000, mu = rep(0,500), sigma = rep(1,500)){
+  wn <- matrix(ncol = N, nrow = n)
+  ar1 <- matrix(ncol=N, nrow=n)
+  ma1 <- matrix(ncol=N, nrow=n)
+  arma11 <- matrix(ncol=N,nrow=n)
+  arima111 <- matrix(ncol=N,nrow=n)
+
+  for(i in 1:N){
+    wn[,i] <- ts(rnorm(n, mean = mu[i], sd = sigma[i]))
+
+    # initialize the first value:
+    ar1[1,i] <- ma1[1,i] <- arma11[1,i] <- wn[1,i]
+
+    # loop through and create the 2:nth values:
+    for(j in 2:n){
+      ar1[j,i] <- ar1[j - 1,i]*0.8 + wn[j,i]
+      ma1[j,i] <- wn[j - 1,i]*0.8 + wn[j,i]
+      arma11[j,i] <- arma11[j - 1,i]*0.8 + wn[j - 1,i]*0.8 + wn[j,i]
+      }
+    }
+
+  arima111 <- apply(arma11, 2, cumsum)
+
+  # turn them into time series, and for the last two, "integrate" them via
+  # cumulative sum
+  ar1 <- ts(ar1)
+  ma1 <- ts(ma1)
+  arma11 <- ts(arma11)
+  arima111 <- ts(arima111)
+
+  return(list(ar1 = ar1,
+              ma1 = ma1,
+              arma11 = arma11,
+              arima111 = arima111))
+}
+```
+
+```{r, sim_wt_ts-run}
+# mu is 0 and sigma is 1
+wt_ts_0 <- sim_wt_ts()
+
+# mu is W3 and sigma is 1
+W1 <- runif(500, min = -1, max = 1)
+W2 <- rbinom(500, prob = plogis(W1), size = 1)
+W3 <- W1 + W2
+wt_ts_W <- sim_wt_ts(mu = W3)
+
+# mu is W3 and sigma is W4
+W4 <- W1 + 1
+wt_ts_WW <- sim_wt_ts(mu = W3, sigma = W4)
+```
+
+Now we can visualize the various models.
+
+\pagebreak
+
+#### 1. An autoregressive model of order 1 ($p=1$), where each value of $y$ equals the previous value times 0.8, plus the white noise.
+
+\vspace{.1in}
+
+```{r, sim_wt_ts-plot-ar1, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+plot(wt_ts_0$ar1[,1:4], main = expression(paste("AR(1): ", mu," = 0, ", sigma," = 1")))
+plot(wt_ts_W$ar1[,1:4], main = expression(paste("AR(1): ", mu," = ", phi, "(W), ", sigma," = 1")))
+plot(wt_ts_WW$ar1[,1:4], main = expression(paste("AR(1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
+```
+
+\pagebreak
+
+#### 2. A moving average of order 1 ($q=1$), where each value of $y$ equals the latest bit of white noise, plus 0.8 times the previous value of white noise.
+
+\vspace{.1in}
+
+```{r, sim_wt_ts-plot-ma1, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+plot(wt_ts_0$ma1[,1:4], main = expression(paste("MA(1): ", mu," = 0, ", sigma," = 1")))
+plot(wt_ts_W$ma1[,1:4], main = expression(paste("MA(1): ", mu," = ", phi, "(W), ", sigma," = 1")))
+plot(wt_ts_WW$ma1[,1:4], main = expression(paste("MA(1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
+```
+
+\pagebreak
+
+#### 3. An autoregressive moving average model of order (1, 1), combining the two above.
+
+\vspace{.1in}
+
+```{r, sim_wt_ts-plot-arma11, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+plot(wt_ts_0$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = 0, ", sigma," = 1")))
+plot(wt_ts_W$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = ", phi, "(W), ", sigma," = 1")))
+plot(wt_ts_WW$arma11[,1:4], main = expression(paste("ARMA(1,1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
+```
+
+\pagebreak
+
+#### 4. An ARIMA(1, 1, 1) model that is the cumulative sum of the ARMA(1, 1), so the first difference of the time series is stationary.
+
+\vspace{.1in}
+
+```{r, sim_wt_ts-plot-arima111, fig.align="center", echo=FALSE, out.width= "60%", out.height= "60%"}
+plot(wt_ts_0$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = 0, ", sigma," = 1")))
+plot(wt_ts_W$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = ", phi, "(W), ", sigma," = 1")))
+plot(wt_ts_WW$arima111[,1:4], main = expression(paste("ARIMA(1,1,1): ", mu," = ", phi, "(W), ", sigma," = ", phi, "(W)")))
+```
+
+Simulations are based on those presented in [free range statistics](http://freerangestats.info/blog/2015/11/21/arima-sims)
+
+\pagebreak
+
+# MIMIC Simulation
+
+We consider the following outcomes of interest: `abpmean`, `abpsys`, and
+`abpdias`. For each outcome of interest, we generate a table where each row
+corresponds to a subject and the columns are the model parameters.
+
+Also, for each outcome of interest, we generate another table where each row
+corresponds to a subject and the columns are measures of accuracy of the model
+fit on the training and test data. The first 80% of data is split into a
+training set, and last 20% into a test set. The training set performance
+is the in sample performance (i.e. it is computing performance using the data
+that it was fit with) and we can compare this performance to the test set. The
+accuracy measures pertain to predicting the test data and we consider two
+mechanisms for this prediction:
+
+1. multi-step -- forecasts are for as many time points in the test set. This
+procedure applies the already fitted model and repeatedly feeds the
+predicted data point back into the prediction equation to get the next
+prediction.
+2. one-step -- forecasts are for as many time points in the test set. This
+procedure applies the already fitted model and predicts "one step ahead"
+forecasts by predicting the next outcome and then adds the actual outcome to the
+prediction equation for next outcome prediction.
+
+*Note* both of these procedures update the prediction equation with the new
+data point, and do not changing the model coefficients. You can do a full refit
+of the model each time you get a new data point and then predict with that, but
+I do not consider that procedure in this assessment of model accuracy.
+
+The measures of accuracy are the mean error (`ME`), root mean squared error
+(`RMSE`), mean absolute error (`MAE`), mean percentage error (`MPE`), mean
+absolute percentage error (`MAPE`), mean absolute scaled error (`MASE`) and the
+first-order autocorrelation coefficient (`ACF1`). [More here on evaluating
+forecast accuracy.](https://otexts.com/fpp2/accuracy.html)
+
+Later on, we consider a more sophisticated version of training/test sets with
+time series cross-validation, which incorporates a series of test sets, each
+consisting of a single observation. We could choose a forecasting model for
+simulation by identifying the model with the smallest RMSE based on time
+series cross-validation.
+
+## ARIMA
+
+We employ the `auto.arima` function to fit the "best" ARIMA model to a
+univariate time series (i.e., each subject in the MIMIC data). In this case, the
+best model is defined as the one that has the least information loss relative to
+the true model. Information criteria (IC) are estimates of the Kullback Leibler
+information loss. The best known IC is the Akaike IC $AIC=−2ln(l)+2k$
+and its corrected form for small sample sizes, $AICc=AIC+\frac{2k(k+1)}{N−k−1}$,
+as well as its Bayesian alternative, $BIC=−2ln(l)+ln(N)\*k$, where $l$ is the 
+maximum likelihood of the model, $k$ is the number of degrees of freedom (or 
+independently adjusted parameters) in the model and $N$ is the number of 
+observations. [Is there any reason to prefer the AIC or BIC over the
+other?](https://stats.stackexchange.com/questions/577/is-there-any-reason-to-prefer-the-aic-or-bic-over-the-other)
+
+`auto.arima` selects the optimal autoregressive and moving average orders $p$
+and $q$ based on a chosen information criterion (AICc by default) from a local
+search over a few regions of values.
+
+```{r, mimic-autoarima-fxn, echo = FALSE, eval = FALSE}
+run_auto_arima <- function(df, outcome) {
+
+  samples <- unique(df$subject_id)
+
+  # for each sample:
+  fit_list <- lapply(samples, function(x){
+
+    # 1. subset data to only contain that sample and make sure it's in order
+    sub <- df[df$subject_id == x, ]
+    sub_ord <- sub[order(sub$time_and_date), ]
+
+    # 2. split first 80% of data into training set, and last 20% into test set
+    split <- round(nrow(sub_ord) * .8)
+    train <- sub_ord[1:split, ]
+    train_outcome <- as.numeric(unlist(train[,which(colnames(train)==outcome)]))
+    test <- sub_ord[(split + 1):nrow(sub_ord), ]
+    test_outcome <- as.numeric(unlist(test[,which(colnames(test) == outcome)]))
+
+    # 3. fit auto ARIMA
+    fit <- auto.arima(y = train_outcome, stepwise = FALSE,
+                                approximation = FALSE)
+
+    # 4. obtain model coefficients                                          
+    fit_coef <- fit$coef
+
+    # 5. calculate residuals for subseuqent ACF and PACF plotting
+    fit_resid <- residuals(fit)
+
+    # 6. measure accuracy
+    # "multi-step" forecast
+    multi_forecast <- forecast(fit, h = length(test_outcome))
+    multi_accuracy <- round(accuracy(multi_forecast, x = test_outcome), 4)
+    # "one-step" forecast
+    model_test <- Arima(test_outcome, model = fit)
+    onestep_forecast <- fitted(model_test)
+    # accuracy of the "one-step ahead" out of sample forecasts
+    onestep_accuracy <- round(accuracy(model_test), 4)
+
+    plot_info <- list(multi_forecast = multi_forecast,
+                      onestep_forecast = onestep_forecast,
+                      test = test_outcome)
+
+    # 7. make relevant results pretty and return them
+    accuracy_train <- multi_accuracy["Training set",]
+    names(accuracy_train) <- paste(names(accuracy_train), "train", sep = "_")
+    accuracy_test <- multi_accuracy["Test set",]
+    names(accuracy_test) <- paste(names(accuracy_test), "test", sep = "_")
+    accuracy_onestep <- onestep_accuracy["Training set",]
+    names(accuracy_onestep) <- paste(names(accuracy_onestep),"onestep",sep="_")
+    fit_accuracy <- c(accuracy_test, accuracy_onestep, accuracy_train)
+
+    return(list(coefficients = fit_coef,
+                accuracy = fit_accuracy,
+                plot_info = plot_info,
+                residuals = fit_resid))
+  })
+
+  # make results pretty
+  names(fit_list) <- samples
+
+  list_coef <- lapply(fit_list, function(x) data.frame(as.list(x$coefficients)))
+  list_coef <- list_coef[lapply(list_coef, length) > 0]
+  coefficients <- rbindlist(list_coef, fill = TRUE)
+  coefficients <- data.frame(subject_id = names(list_coef), coefficients)
+
+  list_acc <- lapply(fit_list, function(x) data.frame(as.list(x$accuracy)))
+  list_acc <- list_acc[lapply(list_acc, length) > 0]
+  accuracy <- rbindlist(list_acc, fill = TRUE)
+  accuracy <- data.frame(subject_id = names(list_acc), accuracy)
+  accuracy <- dplyr::select(accuracy, -c(ACF1_test))
+
+  plot_data <- lapply(fit_list, function(x) x$plot_info)
+  names(plot_data) <- samples
+
+  residuals <- lapply(fit_list, function(x) x$residuals)
+  names(residuals) <- samples
+
+  return(list(coefficients = coefficients,
+              accuracy = accuracy,
+              plot_data = plot_data,
+              residuals = residuals))
+}
+```
+
+```{r, mimic-autoarima-run, eval = FALSE}
+library(here)
+library(forecast)
+load(here::here("Data", "mimic.Rdata"))
+set.seed(4197)
+
+# sample n individuals with t hours of data
+dat <- sample_n_t(mimic, n = 500, t = 5)
+
+arima_abpsys <- run_auto_arima(df = dat, outcome = "abpsys")
+arima_abpdias <- run_auto_arima(df = dat, outcome = "abpdias")
+arima_abpmean <- run_auto_arima(df = dat, outcome = "abpmean")
+```
+```{r, mimic-autoarima-save, echo = FALSE, eval = FALSE}
+save(arima_abpmean, file = here::here("Results", "arima_abpmean.RData"))
+save(arima_abpsys, file = here::here("Results", "arima_abpsys.RData"))
+save(arima_abpdias, file = here::here("Results", "arima_abpdias.RData"))
+```
+```{r, mimic-autoarima-open, echo = FALSE, message=FALSE}
+library(here)
+library(forecast)
+load(here::here("Results", "arima_abpmean.RData"))
+load(here::here("Results", "arima_abpsys.RData"))
+load(here::here("Results", "arima_abpdias.RData"))
+```
+
+\pagebreak
+
+```{r, mimic-autoarima-view, echo = FALSE}
+library(kableExtra)
+
+coef_sys <- t(head(arima_abpsys$coefficients, 8))  
+colnames(coef_sys) <- coef_sys[1,]
+coef_sys <- coef_sys[-1,]
+names <- rownames(coef_sys)
+coef_sys <- apply(coef_sys, 2, as.numeric)
+rownames(coef_sys) <- names
+kable(coef_sys, format = "latex", booktabs = T, digits = 4,
+      caption = "ARIMA Coefficients with Systolic BP Outcome")
+acc_sys <- t(head(arima_abpsys$accuracy, 8))  
+colnames(acc_sys) <- acc_sys[1,]
+acc_sys <- acc_sys[-1,]
+kable(acc_sys, format = "latex", booktabs = T,
+      caption = "ARIMA Accuracy with Systolic BP Outcome")
+```
+
+\pagebreak
+
+```{r, mimic-autoarima-view-dias, echo = FALSE}
+coef_dias <- t(head(arima_abpdias$accuracy, 8))  
+colnames(coef_dias) <- coef_dias[1,]
+coef_dias <- coef_dias[-1,]
+names <- rownames(coef_dias)
+coef_dias <- apply(coef_dias, 2, as.numeric)
+rownames(coef_dias) <- names
+kable(coef_dias, format = "latex", booktabs = T, digits = 4,
+      caption = "ARIMA Coefficients with Diastolic BP Outcome")
+acc_dias <- t(head(arima_abpdias$accuracy, 8))  
+colnames(acc_dias) <- acc_dias[1,]
+acc_dias <- acc_dias[-1,]      
+kable(acc_dias, format = "latex", booktabs = T,
+      caption = "ARIMA Accuracy with Diastolic BP Outcome")     
+```
+
+\pagebreak
+
+```{r, mimic-autoarima-view-mean, echo = FALSE}
+coef_mean <- t(head(arima_abpmean$coefficients, 8))  
+colnames(coef_mean) <- coef_mean[1,]
+coef_mean <- coef_mean[-1,]
+names <- rownames(coef_mean)
+coef_mean <- apply(coef_mean, 2, as.numeric)
+rownames(coef_mean) <- names
+kable(coef_mean, format = "latex", booktabs = T, digits = 4,
+      caption = "ARIMA Coefficients with Mean BP Outcome")
+acc_mean <- t(head(arima_abpmean$accuracy, 8))  
+colnames(acc_mean) <- acc_mean[1,]
+acc_mean <- acc_mean[-1,]      
+kable(acc_mean, format = "latex", booktabs = T,
+      caption = "ARIMA Accuracy with Mean BP Outcome")
+```
+
+\clearpage
+
+## Time series cross-validation
+Since we are interested in models that produce good 30-minute-ahead forecasts,
+we can employ a cross-validation procedure based on a rolling forecasting origin
+which allows multi-step errors. [More details
+here](https://otexts.com/fpp2/accuracy.html).
+
+# Moving forward
+- MIMIC data without the time gap
+- Defining a hypotensive episode

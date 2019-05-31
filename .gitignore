@@ -1,0 +1,6 @@
+Data/*.Rdata
+Data/*.RData
+Results/arima_*.RData
+.Rproj.user
+*.log
+Simulations/*_files
