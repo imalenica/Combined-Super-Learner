@@ -2,11 +2,15 @@
 title: "Time Series Simulation"
 author: "Rachael Phillips"
 date: ""
-output: pdf_document
+output:
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tinytex)
+options(tinytex.verbose = TRUE)
 ```
 
 In this project, we will be in a setting of multi-person multi-dimensional time
@@ -28,11 +32,9 @@ you don’t measure (unexplained heterogeneity).
 * Time is not stationary (sudden jumps) so you cannot learn from the past how
 much it will change in the future.
 
-**Today I simulate from relatively simplistic ARIMA models.**
+**Previously I simulated from relatively simplistic ARIMA models.**
 
-**Later I will model the binary or continuous MIMIC outcome data with GLARMA or
-ARIMA, respectively. If the GLARMA/ARIMA model seems to be suitable for modeling
-the MIMIC data, then I can create a simulated dataset with the fitted model.**
+**Today I model the continuous MIMIC outcome data with ARIMA.**
 
 # Simple ARIMA Simulations
 
@@ -235,7 +237,7 @@ Simulations are based on those presented in [free range statistics](http://freer
 
 \pagebreak
 
-# MIMIC-based Simulation
+# MIMIC Simulation
 
 We consider the following outcomes of interest: `abpmean`, `abpsys`, and
 `abpdias`. For each outcome of interest, we generate a table where each row
@@ -282,18 +284,15 @@ We employ the `auto.arima` function to fit the "best" ARIMA model to a
 univariate time series (i.e., each subject in the MIMIC data). In this case, the
 best model is defined as the one that has the least information loss relative to
 the true model. Information criteria (IC) are estimates of the Kullback Leibler
-information loss. The best known IC is the Akaike IC
-$$AIC=−2ln(l)+2k$$
-and its corrected form for small sample sizes,
-$$AICc=AIC+\frac{2k(k+1)}{N−k−1}$$
-as well as its Bayesian alternative,
-$$BIC=−2ln(l)+ln(N)\*k$$
-where $l$ is the maximum likelihood of the model, $k$ is the number of degrees
-of freedom (or independently adjusted parameters) in the model and $N$ is the
-number of observations. [Is there any reason to prefer the AIC or BIC over the
+information loss. The best known IC is the Akaike IC $AIC=−2ln(l)+2k$
+and its corrected form for small sample sizes, $AICc=AIC+\frac{2k(k+1)}{N−k−1}$,
+as well as its Bayesian alternative, $BIC=−2ln(l)+ln(N)\*k$, where $l$ is the 
+maximum likelihood of the model, $k$ is the number of degrees of freedom (or 
+independently adjusted parameters) in the model and $N$ is the number of 
+observations. [Is there any reason to prefer the AIC or BIC over the
 other?](https://stats.stackexchange.com/questions/577/is-there-any-reason-to-prefer-the-aic-or-bic-over-the-other)
 
-`auto.arima` selects the optimal autoregressive and moving-average orders $p$
+`auto.arima` selects the optimal autoregressive and moving average orders $p$
 and $q$ based on a chosen information criterion (AICc by default) from a local
 search over a few regions of values.
 
@@ -323,7 +322,10 @@ run_auto_arima <- function(df, outcome) {
     # 4. obtain model coefficients                                          
     fit_coef <- fit$coef
 
-    # 5. measure accuracy
+    # 5. calculate residuals for subseuqent ACF and PACF plotting
+    fit_resid <- residuals(fit)
+
+    # 6. measure accuracy
     # "multi-step" forecast
     multi_forecast <- forecast(fit, h = length(test_outcome))
     multi_accuracy <- round(accuracy(multi_forecast, x = test_outcome), 4)
@@ -337,7 +339,7 @@ run_auto_arima <- function(df, outcome) {
                       onestep_forecast = onestep_forecast,
                       test = test_outcome)
 
-    # 6. make relevant results pretty and return them
+    # 7. make relevant results pretty and return them
     accuracy_train <- multi_accuracy["Training set",]
     names(accuracy_train) <- paste(names(accuracy_train), "train", sep = "_")
     accuracy_test <- multi_accuracy["Test set",]
@@ -348,7 +350,8 @@ run_auto_arima <- function(df, outcome) {
 
     return(list(coefficients = fit_coef,
                 accuracy = fit_accuracy,
-                plot_info = plot_info))
+                plot_info = plot_info,
+                residuals = fit_resid))
   })
 
   # make results pretty
@@ -368,9 +371,13 @@ run_auto_arima <- function(df, outcome) {
   plot_data <- lapply(fit_list, function(x) x$plot_info)
   names(plot_data) <- samples
 
+  residuals <- lapply(fit_list, function(x) x$residuals)
+  names(residuals) <- samples
+
   return(list(coefficients = coefficients,
               accuracy = accuracy,
-              plot_data = plot_data))
+              plot_data = plot_data,
+              residuals = residuals))
 }
 ```
 
@@ -378,22 +385,21 @@ run_auto_arima <- function(df, outcome) {
 library(here)
 library(forecast)
 load(here::here("Data", "mimic.Rdata"))
-
 set.seed(4197)
 
 # sample n individuals with t hours of data
 dat <- sample_n_t(mimic, n = 500, t = 5)
 
-arima_abpmean <- run_auto_arima(df = dat, outcome = "abpmean")
 arima_abpsys <- run_auto_arima(df = dat, outcome = "abpsys")
 arima_abpdias <- run_auto_arima(df = dat, outcome = "abpdias")
+arima_abpmean <- run_auto_arima(df = dat, outcome = "abpmean")
 ```
 ```{r, mimic-autoarima-save, echo = FALSE, eval = FALSE}
 save(arima_abpmean, file = here::here("Results", "arima_abpmean.RData"))
 save(arima_abpsys, file = here::here("Results", "arima_abpsys.RData"))
 save(arima_abpdias, file = here::here("Results", "arima_abpdias.RData"))
 ```
-```{r, mimic-autoarima-open, echo = FALSE}
+```{r, mimic-autoarima-open, echo = FALSE, message=FALSE}
 library(here)
 library(forecast)
 load(here::here("Results", "arima_abpmean.RData"))
@@ -401,118 +407,63 @@ load(here::here("Results", "arima_abpsys.RData"))
 load(here::here("Results", "arima_abpdias.RData"))
 ```
 
-Let's view the first 6 rows of the outcome specific tables that we mentioned
-above.
+\pagebreak
 
 ```{r, mimic-autoarima-view, echo = FALSE}
-kable(head(arima_abpmean$coefficients, 10), format = "latex",
-      caption = "ARIMA Coefficients with Mean BP Outcome")
-acc_mean <- t(head(arima_abpmean$accuracy, 10))  
-colnames(acc_mean) <- acc_mean[1,]
-acc_mean <- acc_mean[-1,]      
-kable(acc_mean, format = "latex",
-      caption = "ARIMA Accuracy with Mean BP Outcome")
+library(kableExtra)
 
-kable(head(arima_abpsys$coefficients, 10), format = "latex",
+coef_sys <- t(head(arima_abpsys$coefficients, 8))  
+colnames(coef_sys) <- coef_sys[1,]
+coef_sys <- coef_sys[-1,]
+names <- rownames(coef_sys)
+coef_sys <- apply(coef_sys, 2, as.numeric)
+rownames(coef_sys) <- names
+kable(coef_sys, format = "latex", booktabs = T, digits = 4,
       caption = "ARIMA Coefficients with Systolic BP Outcome")
-acc_sys <- t(head(arima_abpsys$accuracy, 10))  
+acc_sys <- t(head(arima_abpsys$accuracy, 8))  
 colnames(acc_sys) <- acc_sys[1,]
 acc_sys <- acc_sys[-1,]
-kable(acc_sys, format = "latex",
+kable(acc_sys, format = "latex", booktabs = T,
       caption = "ARIMA Accuracy with Systolic BP Outcome")
+```
 
-kable(head(arima_abpdias$coefficients, 10), format = "latex",
+\pagebreak
+
+```{r, mimic-autoarima-view-dias, echo = FALSE}
+coef_dias <- t(head(arima_abpdias$accuracy, 8))  
+colnames(coef_dias) <- coef_dias[1,]
+coef_dias <- coef_dias[-1,]
+names <- rownames(coef_dias)
+coef_dias <- apply(coef_dias, 2, as.numeric)
+rownames(coef_dias) <- names
+kable(coef_dias, format = "latex", booktabs = T, digits = 4,
       caption = "ARIMA Coefficients with Diastolic BP Outcome")
-acc_dias <- t(head(arima_abpdias$accuracy, 10))  
+acc_dias <- t(head(arima_abpdias$accuracy, 8))  
 colnames(acc_dias) <- acc_dias[1,]
 acc_dias <- acc_dias[-1,]      
-kable(acc_dias, format = "latex",
+kable(acc_dias, format = "latex", booktabs = T,
       caption = "ARIMA Accuracy with Diastolic BP Outcome")     
 ```
 
-We can visualize some of these results and compare the multi-step forecasts to
-the one-step forecasts. We should see that the errors from the onestep forecasts
-are not as extreme as the multistep forecast errors. This is because we are
-continually updating the prediction equation with new data. So we don't
-propagate uncertainty from a bad forecast about one time points into the
-forecast for the next time point.
+\pagebreak
 
-```{r, mimic-autoarima-plotfxns, echo = FALSE}
-plot_multi <- function(multi_forecast, test_outcome) {
-  return(multi_forecast %>%
-          autoplot() +
-          geom_line(aes(x = as.numeric(time(test_outcome)),
-                        y = as.numeric(test_outcome)),
-                    col = "black"))
-}
-
-plot_onestep <- function(multi_forecast, test_outcome) {
-  return(onestep_forecast %>%
-          autoplot() +
-          geom_line(aes(x = as.numeric(time(test_outcome)),
-                        y = as.numeric(test_outcome)),
-                    col = "black"))
-}
-
-plot_all <- function(multi_forecast, onestep_forecast, test_outcome) {            
-  return(ggplot() +
-        geom_line(aes(x = as.numeric(time(test_outcome)),
-                      y = as.numeric(test_outcome)),
-                   col = "black") +
-        geom_line(aes(x = as.numeric(time(onestep_forecast)),
-                      y = as.numeric(onestep_forecast)),
-                      col = "red") +
-        geom_line(aes(x = as.numeric(time(multi_forecast)),
-                      y = as.numeric(multi_forecast)),
-                      col = "blue") +              
-        scale_color_discrete(name = "Forecasts", labels = c("truth",
-                                                           "onestep",
-                                                           "multi")))
-}
+```{r, mimic-autoarima-view-mean, echo = FALSE}
+coef_mean <- t(head(arima_abpmean$coefficients, 8))  
+colnames(coef_mean) <- coef_mean[1,]
+coef_mean <- coef_mean[-1,]
+names <- rownames(coef_mean)
+coef_mean <- apply(coef_mean, 2, as.numeric)
+rownames(coef_mean) <- names
+kable(coef_mean, format = "latex", booktabs = T, digits = 4,
+      caption = "ARIMA Coefficients with Mean BP Outcome")
+acc_mean <- t(head(arima_abpmean$accuracy, 8))  
+colnames(acc_mean) <- acc_mean[1,]
+acc_mean <- acc_mean[-1,]      
+kable(acc_mean, format = "latex", booktabs = T,
+      caption = "ARIMA Accuracy with Mean BP Outcome")
 ```
 
-```{r, mimic-autoarima-plots, echo = FALSE}
-plot_multi(multi_forecast = arima_abpmean$plot_data[[1]]$multi_forecast,
-           test_outcome = arima_abpmean$plot_data[[1]]$test_outcome)
-plot_onestep(onestep_forecast = arima_abpmean$plot_data[[1]]$onestep_forecast,
-             test_outcome = arima_abpmean$plot_data[[1]]$test_outcome)
-plot_all(onestep_forecast = arima_abpmean$plot_data[[1]]$onestep_forecast,
-         multi_forecast = arima_abpmean$plot_data[[1]]$multi_forecast,
-         test_outcome = arima_abpmean$plot_data[[1]]$test_outcome)
-
-plot_multi(multi_forecast = arima_abpsys$plot_data[[1]]$multi_forecast,
-           test_outcome = arima_abpsys$plot_data[[1]]$test_outcome)
-plot_onestep(onestep_forecast = arima_abpsys$plot_data[[1]]$onestep_forecast,
-             test_outcome = arima_abpsys$plot_data[[1]]$test_outcome)
-plot_all(onestep_forecast = arima_abpsys$plot_data[[1]]$onestep_forecast,
-         multi_forecast = arima_abpsys$plot_data[[1]]$multi_forecast,
-         test_outcome = arima_abpsys$plot_data[[1]]$test_outcome)
-
-plot_multi(multi_forecast = arima_abpdias$plot_data[[1]]$multi_forecast,
-           test_outcome = arima_abpdias$plot_data[[1]]$test_outcome)
-plot_onestep(onestep_forecast = arima_abpdias$plot_data[[1]]$onestep_forecast,
-             test_outcome = arima_abpdias$plot_data[[1]]$test_outcome)
-plot_all(onestep_forecast = arima_abpdias$plot_data[[1]]$onestep_forecast,
-         multi_forecast = arima_abpdias$plot_data[[1]]$multi_forecast,
-         test_outcome = arima_abpdias$plot_data[[1]]$test_outcome)         
-```
-
-```{r, mimic-autoarima-plots-residuals, echo = FALSE}
-plot(arima_abpmean$plot_data[[1]]$multi_forecast,
-     main = "Multi-step ARIMA Forecasts with Mean BP Outcome")
-plot(arima_abpmean$plot_data[[1]]$onestep_forecast,
-     main = "One-step ARIMA Forecasts with Mean BP Outcome")
-
-plot(arima_abpsys$plot_data[[1]]$multi_forecast,
-     main = "Multi-step ARIMA Forecasts with Systolic BP Outcome")
-plot(arima_abpsys$plot_data[[1]]$onestep_forecast,
-     main = "One-step ARIMA Forecasts with Systolic BP Outcome")
-
-plot(arima_abpdias$plot_data[[1]]$multi_forecast,
-     main = "Multi-step ARIMA Forecasts with Diastolic BP Outcome")
-plot(arima_abpdias$plot_data[[1]]$onestep_forecast,
-     main = "One-step ARIMA Forecasts with Diastolic BP Outcome")
-```
+\clearpage
 
 ## Time series cross-validation
 Since we are interested in models that produce good 30-minute-ahead forecasts,
@@ -522,6 +473,4 @@ here](https://otexts.com/fpp2/accuracy.html).
 
 # Moving forward
 - MIMIC data without the time gap
-- What's up with the repeated subject ID's with different ages? They are
-clearly different subjects...
-- Maybe the computational folks should share GitHub repos?
+- Defining a hypotensive episode
