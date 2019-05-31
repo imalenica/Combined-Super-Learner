@@ -253,6 +253,7 @@ combine_SL = function(t,gap,h,train_all,
                                loss_regular_SL=loss_regular_SL)
   #loss_individual_SL=loss_individual_SL
   
+  
   return(list(#Final, weighted prediction.
     preds_fin=preds_fin, 
     #Final, weighted prediction for the regular SL
