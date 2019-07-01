@@ -93,4 +93,8 @@ run_class <- function(df, cols_fac, cols_num) {
   df[cols_num] <- lapply(df[cols_num], as.numeric)
   df[cols_fac] <- lapply(df[cols_fac], as.factor)
   return(df)
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> b65d04bdb016e8ac4b850085a9bfd72781733edc

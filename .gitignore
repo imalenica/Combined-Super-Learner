@@ -4,3 +4,7 @@ Results/arima_*.RData
 .Rproj.user
 *.log
 Simulations/*_files
+.Rhistory
+*.tex
+Reports/Preprocessing_cache/
+Simulations/arima_sample*.Rmd
