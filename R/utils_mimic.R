@@ -87,10 +87,6 @@ new_Y_sol2 = function(train_all, window=5, cutoff=62){
   return(train_all)
 }
 
-<<<<<<< HEAD
-
-
-=======
 run_class <- function(df, cols_fac, cols_num) {
   cols_all <- c(cols_fac, cols_num)
   df[cols_all] <- lapply(df[cols_all], as.character)
@@ -98,4 +94,3 @@ run_class <- function(df, cols_fac, cols_num) {
   df[cols_fac] <- lapply(df[cols_fac], as.factor)
   return(df)
 }
->>>>>>> 41a78a4e98c7971fc3d66d9a94a43189025a93d8

@@ -49,9 +49,9 @@ train_all$gender <- ifelse(train_all$gender=="M",1,0)
 #Specify the covariates and outcome:
 outcome <- "event"
 covars_wbaseline <- c("gender","age","care_unit",
-                      "los_icu","amine","sedation","ventilation","spo2","abpsys",
+                      "amine","sedation","ventilation","spo2","abpsys",
                       "abpdias","abpmean")
-covars <- c("los_icu","amine","sedation","ventilation","spo2","abpsys","abpdias","abpmean")
+covars <- c("amine","sedation","ventilation","spo2","abpsys","abpdias","abpmean")
 ```
 
 ```{r}
