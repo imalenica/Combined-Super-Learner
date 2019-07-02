@@ -18,7 +18,7 @@ sample_n_t = function(df,n,t){
   train_all <- train_all %>% distinct(subject_id, time, periode, .keep_all = TRUE)
 
   #Set time to be continuous
-  train_all <- train_all %>% group_by(subject_id) %>% mutate(time = 1:(t*60))
+  train_all <- train_all %>% dplyr::group_by(subject_id) %>% dplyr::mutate(time = 1:(t*60))
 
   return(train_all)
 }

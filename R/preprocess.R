@@ -39,8 +39,6 @@ dat_new <- df[!(df$subject_id %in% oddities$subject_id),]
 
 ########################## Outcome Measurement Error ###########################
 
-df_outcome_odd <- dat_new[(dat_new$abpsys == dat_new$abpdias),]
-
 detect_outliers <- function(id) {
   odd <- dplyr::filter(df_outcome_odd, subject_id == id)
   all <- dplyr::filter(dat_new, subject_id == id)
@@ -48,12 +46,9 @@ detect_outliers <- function(id) {
   qnt <- quantile(x$abpmean, probs=c(.25, .75), na.rm = TRUE)
   H <- 1.5 * IQR(x$abpmean, na.rm = TRUE)
   odd_out <- dplyr::mutate(odd, outlier =
-  ifelse(abpmean < (qnt[1] - H) | abpmean > (qnt[2] + H), 1, 0))
+                             ifelse(abpmean < (qnt[1] - H) | abpmean > (qnt[2] + H), 1, 0))
   return(odd_out)
 }
-df_outcome_odd <- df_outcome_odd[!(df_outcome_odd$subject_id %in% c(25373,26209)),]
-outcome_odd_list <- lapply(unique(df_outcome_odd$subject_id), detect_outliers)
-outcome_odd_df <- bind_rows(outcome_odd_list)
 
 remove_outliers <- function(id) {
   outlier <- outcome_odd_df %>%
@@ -63,6 +58,14 @@ remove_outliers <- function(id) {
   x <- all[!(all$time_and_date %in% outlier$time_and_date),]
   return(x)
 }
+
+df_outcome_odd<-dat_new
+#This results in many missing time points...
+#df_outcome_odd <- dat_new[(dat_new$abpsys == dat_new$abpdias),]
+
+df_outcome_odd <- df_outcome_odd[!(df_outcome_odd$subject_id %in% c(25373,26209)),]
+outcome_odd_list <- lapply(unique(df_outcome_odd$subject_id), detect_outliers)
+outcome_odd_df <- bind_rows(outcome_odd_list)
 
 dat_clean_list <- lapply(unique(outcome_odd_df$subject_id), remove_outliers)
 dat_clean <- bind_rows(dat_clean_list)
@@ -109,6 +112,10 @@ mimic <- mimic[(mimic$subject_id %in% dat$subject_id),]
 
 mimic <- new_Y_sol1(mimic, cutoff = 65)
 mimic <- mimic[order(mimic$subject_id, mimic$time_and_date), ]
+#save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
+
+#Does not remove abpsys/abpdias 0/0 entries to avoid missing time points
+save(mimic, file = here::here("Data","mimic_im.Rdata"), compress = TRUE)
 
 ################################################################################
 # Data numerics
