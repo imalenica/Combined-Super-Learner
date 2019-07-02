@@ -108,10 +108,7 @@ mimic <- mimic[(mimic$subject_id %in% dat$subject_id),]
 ########################## Classifying a hypotensive event #####################
 
 mimic <- new_Y_sol1(mimic, cutoff = 65)
-
-
 mimic <- mimic[order(mimic$subject_id, mimic$time_and_date), ]
-save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
 
 ################################################################################
 # Data numerics
@@ -189,10 +186,11 @@ merged_dat <- merged_dat %>% dplyr::group_by(subject_id) %>%
 
 mimic_nogap <- new_Y_sol1(merged_dat, cutoff = 65)
 
+################################# Save data ####################################
 
-mimic_nogap <- mimic_nogap[order(mimic_nogap$subject_id, mimic_nogap$time_and_date), ]
+mimic_nogap <- mimic_nogap[order(mimic_nogap$subject_id,
+                                 mimic_nogap$time_and_date), ]
 save(mimic_nogap, file = here::here("Data","mimic_nogap.Rdata"),compress = TRUE)
-
 
 mimic_gap <- mimic_nogap[!is.na(mimic_nogap$event),]
 save(mimic_gap, file = here::here("Data", "mimic_gap.Rdata"), compress = TRUE)
