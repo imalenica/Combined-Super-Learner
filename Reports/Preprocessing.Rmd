@@ -1,0 +1,652 @@
+---
+title: "Additional MIMIC Preprocessing"
+author: "Rachael Phillips"
+date: ""
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{lscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{float}
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(skimr)
+library(magrittr)
+library(kableExtra)
+source(here::here("R", "utils_mimic.R"))
+```
+
+# Previously preprocessed data
+
+We begin by examining the data that was previously preprocessed. The data frame
+is titled `df` and is provided in the file `data.Rdata`. It is a long file with
+22 variables and 1,276 unique patients.
+
+For each 90 min patient’s period, there are 60 values for the numerics,
+corresponding to the *observation period*. The objective is to predict a
+hypotensive event in the *prediction period* by using only the previous values
+of the *observation period* after a 30 minute *gap period*.
+
+* Patients are denoted by thier `subject_id`.
+* Baseline variables include `bmi`, `age`, `gender`, `sapsi_first`,
+`sofa_first`, `care_unit`, `admission_type_descr`, `los_icu`, and
+`los_hospital`.
+* Time-varying treatment variables include the following binaries `amine`,
+`sedation`, `ventilation`.
+* Time-varying "numerics" variables include `time_and_date`, `hr`, `abpsys`,
+`abpdias`, `abpmean`, and `spo2`.
+* Time-varying outcome variable is `event` and is defined as an acute
+hypotensive episode during the patient’s prediction period.
+
+Here is how the gap period appears in the data.
+
+\vspace{.2in}
+\tiny
+```{r load, echo = FALSE}
+load(here::here("Data", "data.Rdata"))
+df <- df[order(df$subject_id, df$time_and_date), ]
+df[c(60,61),]
+```
+\normalsize
+\vspace{.2in}
+
+Later, we will examine the data frame `numerics`, which is provided in the
+file `data_numerics.Rdata`. The `numerics` data does not contain this gap
+period (i.e., the 30 minutes of missing data is available)
+
+## Missing outcome and erroneous variable values
+
+\vspace{.2in}
+
+First let's summarize each variable in `df`.
+
+\vspace{.2in}
+\tiny
+```{r skim, echo = FALSE, cache = TRUE}
+skim(df)
+```
+\normalsize
+\vspace{.2in}
+
+We see that the outcome of interest `abpmean` is missing for 525 observations.
+
+The following erroneous values can be seen from the summary above:
+
+* maximum `bmi` of 22436.3 and minimum `bmi` of 4.04
+* maximum `age` of 200
+
+I removed the 525 rows with missing values for `abpmean`.
+
+```{r format, echo = FALSE}
+df <- df[!with(df, is.na(abpmean)),]
+
+df$care_unit <- ifelse(df$care_unit == 1, "MICU",
+                  ifelse(df$care_unit == 2, "SICU",
+                    ifelse(df$care_unit == 4, "CSRU",
+                      ifelse(df$care_unit == 5, "NICU",
+                        ifelse(df$care_unit == 6, "CCU", NA)))))
+
+df <- run_class(df,
+                   cols_fac = c("gender", "care_unit", "admission_type_descr",
+                                "amine", "sedation", "ventilation", "event"),
+                   cols_num = c("periode", "time", "age", "sapsi_first",
+                                "sofa_first", "bmi", "los_icu", "los_hospital",
+                                "hr", "spo2", "abpsys", "abpdias", "abpmean"))
+```
+
+## Subject IDs representing multiple patients
+
+Next, for every subject, I calculated the number of distinct levels for every
+baseline covariate. Each subject should have 1 distinct level for each
+baseline covariate.
+
+\vspace{.2in}
+\tiny
+```{r levs_by_id, echo = FALSE, warning = FALSE}
+levs_by_id <- df %>%
+  dplyr::select(c("subject_id", "gender", "age", "bmi", "care_unit",
+                  "admission_type_descr", "los_icu", "los_hospital",
+                  "sapsi_first", "sofa_first")) %>%
+  dplyr::group_by(subject_id) %>%
+  summarise_each(funs(n_distinct))
+
+oddities <- subset(levs_by_id, rowSums(levs_by_id) - levs_by_id$subject_id != 9)
+oddities
+```
+\normalsize
+\vspace{.2in}
+
+There are 406 patients with more than one distinct level for each baseline
+covariate. How does this appear in the data?
+
+\vspace{.2in}
+\tiny
+```{r s124, echo=FALSE}
+head(df %>% dplyr::filter(subject_id == "124"))
+```
+\normalsize
+\vspace{.2in}
+
+It seems like this subject id is representing more than one patient. However,
+the outcome values are the same across these seemingly different subjects.
+Because I do not know which covariate information corresponds to the outcome
+measurements, I removed all subject id's with multiple baseline covariate
+values.
+
+<!---
+I chose the second approach, and I prioritized removing rows with more NA
+values. If there still remained patients with more than one distinct level for
+each baseline covariate, then I removed those patients.
+--->
+```{r, echo = FALSE, eval=FALSE}
+# for each subject, remove rows with duplicated time and date based on num NA
+rs <- rowSums(is.na(df))
+df_ordered <- df[order(df$subject_id, df$time_and_date, rs), ]
+dat <- df_ordered[!duplicated(df_ordered[c("subject_id", "time_and_date")]), ]
+
+levs_by_id <- dat %>%
+  dplyr::select(c("subject_id", "gender", "age", "bmi", "care_unit",
+                  "admission_type_descr", "los_icu", "los_hospital",
+                  "sapsi_first", "sofa_first")) %>%
+  dplyr::group_by(subject_id) %>%
+  summarise_each(funs(n_distinct))
+
+oddities <- subset(levs_by_id, rowSums(levs_by_id) - levs_by_id$subject_id != 9)
+dat_new <- dat[!(dat$subject_id %in% oddities$subject_id),]
+```
+<!---
+Now we have 1,086 unique subjects, and they are not duplicated.
+--->
+
+```{r remove_out, echo = FALSE}
+dat_new <- df[!(df$subject_id %in% oddities$subject_id),]
+```
+
+\vspace{.2in}
+
+After removing these 406 subject ids, which appear to represent multiple
+patients, 870 subjects remained.
+
+## Outcome measurement error
+
+What does it mean when `abpmean` has a value, but `abpsys` and `abpdias` are
+both zero? See below.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+df_outcome_odd <- dat_new[(dat_new$abpsys == dat_new$abpdias),]
+head(df_outcome_odd, 5)
+```
+\normalsize
+\vspace{.2in}
+
+There are 65,022 rows where this is the case. Here's how this looks in the data.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+dat_new[c(25:30),]
+```
+\normalsize
+\vspace{.2in}
+
+The above `abpmean` values (with `abpsys` and `abpdias` both zero) seem to be
+inconsistent with the other `abpmean` readings.
+
+\vspace{.2in}
+
+However, in other cases (like below), these odd `abpmean` values are consistent
+with the normal `abpmean` readings.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+df[c(615:623),]
+```
+\normalsize
+\vspace{.2in}
+
+To solve this issue, I calculated subject specific `abpmean` outlier thresholds
+as a way to determine if these odd `abpmean` values are outliers or not.
+
+\vspace{.2in}
+
+It's important to note that the subject specific distributions of `abpmean`
+values did consider the missing data in the gap period. Section 2.4.1 resolves
+this issue.
+
+\vspace{.2in}
+
+For 2 subjects (ids 25373 and 26209), *all* of the outcome measurements
+contain zeros for `abpsys` and `abpdias` and values for `abpmean`, so the
+outlier thresholds could not be calculated. These two subjects were removed
+from the data. Now we can see the outliers.
+
+\vspace{.2in}
+\tiny
+```{r detout, echo = FALSE}
+detect_outliers <- function(id) {
+  odd <- dplyr::filter(df_outcome_odd, subject_id == id)
+  all <- dplyr::filter(dat_new, subject_id == id)
+  x <- all[!(all$time_and_date %in% odd$time_and_date),]
+  qnt <- quantile(x$abpmean, probs=c(.25, .75), na.rm = TRUE)
+  H <- 1.5 * IQR(x$abpmean, na.rm = TRUE)
+  odd_out <- dplyr::mutate(odd, outlier =
+  ifelse(abpmean < (qnt[1] - H) | abpmean > (qnt[2] + H), 1, 0))
+  return(odd_out)
+}
+df_outcome_odd <- df_outcome_odd[!(df_outcome_odd$subject_id %in% c(25373,26209)),]
+outcome_odd_list <- lapply(unique(df_outcome_odd$subject_id), detect_outliers)
+outcome_odd_df <- bind_rows(outcome_odd_list)
+head(outcome_odd_df, 5)
+```
+\normalsize
+\vspace{.2in}
+
+Of the 65,022 rows with this odd outcome measurement, 31,209 rows were deemed
+outliers and were subsequently removed.  
+
+```{r remout, echo = FALSE}
+remove_outliers <- function(id) {
+  outlier <- outcome_odd_df %>%
+    dplyr::filter(subject_id == id) %>%
+    dplyr::filter(outlier == 1)
+  all <- dplyr::filter(dat_new, subject_id == id)
+  x <- all[!(all$time_and_date %in% outlier$time_and_date),]
+  return(x)
+}
+
+dat_clean_list <- lapply(unique(outcome_odd_df$subject_id), remove_outliers)
+dat_clean <- bind_rows(dat_clean_list)
+dat_new <- dat_new[!(dat_new$subject_id %in% c(25373,26209)),]
+ids <- setdiff(dat_new$subject_id, dat_clean$subject_id)
+dat_clean <- rbind(dat_clean, dat_new[(dat_new$subject_id %in% ids),])
+```
+
+\vspace{.2in}
+
+Now 868 subjects remain in the data.
+
+## Missing baseline characteristics
+
+There are still missing values in the data.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+colSums(is.na(dat_clean))
+```
+\normalsize
+\vspace{.2in}
+
+Removing all NA values would lead to the omission of 308 subjects, but 258 of
+these subjects were only missing bmi and no other value. Many subjects had very
+odd bmi values such as 4, 5, 9, 69, 77, and 22436. Because of this oddity, I
+only removed subjects that were missing values for other covariates.
+
+```{r narem, echo = FALSE, message = FALSE, warning = FALSE}
+s1 <- dat_clean %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_bmi = sum(is.na(bmi)))
+s2 <- dat_clean %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_sofa = sum(is.na(sofa_first)))
+s3 <- dat_clean %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_sapsi = sum(is.na(sapsi_first)))
+s4 <- dat_clean %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_ad = sum(is.na(admission_type_descr)))
+s5 <- dat_clean %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_hospital = sum(is.na(los_hospital)))
+res <- Reduce(merge, list(s1, s2, s3, s4, s5))
+res <- res[apply(res[,-1], 1, function(x) !all(x==0)),]
+s6 <- dat_clean %>% dplyr::group_by(subject_id) %>% dplyr::summarize(n = n())
+res <- left_join(res, s6)
+remove <- subset(res, rowSums(res[,c(3:6)]) != 0)
+new_dat <- dat_clean[!(dat_clean$subject_id %in% remove$subject_id),]
+mimic <- new_dat
+```
+
+\vspace{.2in}
+
+818 subjects remain in the data.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+colSums(is.na(mimic))
+```
+\normalsize
+\vspace{.2in}
+
+## Insufficient patient data
+
+As described in the beginning, the objective is to predict a hypotensive event
+in the prediction period (i.e., after 90 minutes) using only the values in the
+observation period (i.e., the first 60 minutes) after a 30 minute gap period.
+
+\vspace{.2in}
+
+We need each patient to have data in the prediction period, so we can evaulate
+the predictions with their actual value. Thus, we need each subject to have
+data for over 90 minutes to ensure that the data extends into the prediction
+period.
+
+However, of the 818 remaining subjects, 21 had less than 90 minutes of data
+available. These subjects were removed from the data.
+
+```{r insuff, echo = FALSE}
+dat <- mimic %>%
+          dplyr::group_by(subject_id) %>%
+            dplyr::mutate(init_time_and_date = min(time_and_date)) %>%
+              dplyr::mutate(min_elapsed = as.integer((time_and_date -
+                init_time_and_date) / 60) + 1) %>%
+                  dplyr::filter(min_elapsed >= 90)
+
+mimic <- mimic[(mimic$subject_id %in% dat$subject_id),]
+```
+
+797 subjects remain in the data.
+
+## Classifying a hypotensive event
+
+The variable `event` is defined as an acute hypotensive episode during the
+patient’s prediction period. In some cases, it appears that a hypotensive event
+is not classified as one. In other cases, it appears that a non-hypotensive
+event is misclassified as a hypotensive event. Both scenarios are shown below.
+
+\vspace{.2in}
+
+I created a new outcome `Y1` using a function Ivana made. This function
+classifies an event as hypotensive when the current `abpmean` is less than
+62 and at least 5 adjacent *time points* have `abpmean` less than 65. Adjacent
+time points are typically 1 minute apart. There is an exception for time points
+that occur 5 minutes before gap periods and 5 minutes after gap periods. These
+5 minutes before and after gap periods consider adjacent time points that are
+separated by 30 minutes.
+
+\vspace{.2in}
+
+See Section 2.4.1 for a resolution to this issue.
+
+\vspace{.2in}
+
+We can examine outcomes `Y1` and `event` below.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+mimic <- new_Y_sol1(mimic, cutoff = 65)
+mimic[c(74725:74729),]
+mimic[c(86:92),]
+```
+\normalsize
+
+## Summary
+
+This updated data frame with 797 subjects is named `mimic` and does not contain
+
+* NA values for any variable except `bmi`,
+* outcome measurement error outliers,
+* single subject id's which represent multiple patients,
+* or patients with less than 90 minutes of data.
+
+This `mimic` data frame does contain
+
+* the gap period of 30 minutes after every hour of data;
+* a new hypotensive event outcome `Y1` which classifies a hypotensive event as
+  one when the current `abpmean` is less than 65 and at least 5 adjacent time
+  points have `abpmean` less than 65;
+* and subject's with erroneous baseline characteristic measurements, including
+  - `subject_id` = 20936 with `age` of 200,
+  - and many subjects with odd `bmi` values such as 4, 5, 9, 77, 69, 22436.
+
+The `mimic` data is used in the Section 2. If you would like to work with data
+with gap periods, then use the `mimic_gap` data, which is presented in Section
+2.4.1.
+
+```{r order_mimic, echo = FALSE}
+mimic <- mimic[order(mimic$subject_id, mimic$time_and_date), ]
+```
+
+# Data numerics
+
+There is another a data frame `numerics` saved in `data_numerics.Rdata`. This
+data frame contains the outcome data for each subject with no gap periods.
+
+## Omitting 30 minute gap periods
+
+I merged the 30 minute gap period into the `mimic` data that was created in
+the previous section. I filled in this missing 30 minutes of data because it
+is preferred for the simulation, since it provides a more clear representation
+of the patient data.   
+
+The only variables in `numerics` data frame are `subject_id`, `time_and_date`,
+`hr`, `abpsys`, `abpdias`, `abpmean`, and `spo2`.
+
+\vspace{.2in}
+
+Before merging the data, I removed any erroneous/outlier outcome measurements
+according to the method described in Section 1.3.
+
+\vspace{.2in}
+
+Here's how the data looks after merging.
+
+\vspace{.2in}
+\tiny
+```{r num, echo = FALSE, message = FALSE, warning = FALSE}
+load(here::here("Data", "data_numerics.Rdata"))
+num_dat <- numerics[(numerics$subject_id %in% mimic$subject_id),]
+num_outcome_odd <- num_dat[(num_dat$abpsys == num_dat$abpdias),]
+
+detect_outliers <- function(id) {
+  odd <- dplyr::filter(num_outcome_odd, subject_id == id)
+  all <- dplyr::filter(num_dat, subject_id == id)
+  x <- all[!(all$time_and_date %in% odd$time_and_date),]
+  qnt <- quantile(x$abpmean, probs=c(.25, .75), na.rm = TRUE)
+  H <- 1.5 * IQR(x$abpmean, na.rm = TRUE)
+  odd_out <- dplyr::mutate(odd, outlier =
+  ifelse(abpmean < (qnt[1] - H) | abpmean > (qnt[2] + H), 1, 0))
+  return(odd_out)
+}
+num_odd_list <- lapply(unique(num_outcome_odd$subject_id), detect_outliers)
+num_odd_df <- bind_rows(num_odd_list)
+# sum(num_odd_df$outlier) 56059
+
+remove_outliers <- function(id) {
+  outlier <- num_odd_df %>%
+    dplyr::filter(subject_id == id) %>%
+    dplyr::filter(outlier == 1)
+  all <- dplyr::filter(num_dat, subject_id == id)
+  x <- all[!(all$time_and_date %in% outlier$time_and_date),]
+  return(x)
+}
+
+num_clean_list <- lapply(unique(num_outcome_odd$subject_id), remove_outliers)
+num_clean <- bind_rows(num_clean_list)
+ids <- setdiff(num_dat$subject_id, num_clean$subject_id)
+num_clean <- rbind(num_clean, num_dat[(num_dat$subject_id %in% ids),])
+
+merge_dat <- left_join(num_clean, mimic)
+merge_dat[c(58:61),]
+```
+\normalsize
+\vspace{.2in}
+
+## Fill in missing values
+
+We can see that missing values need to be filled in for
+
+1. the time-varying treatments
+2. and the baseline covariates.
+
+I filled in the missing baseline covariate information with `tidyr::fill`. This
+function fills missing values using the previous entry, so we assume that the
+30 minute gap period had the same baseline covariate values as the minute
+*before* this gap started. This procedure is surely reasonable for the baseline
+covariates, but probably not for the time-varying treatment, which is why we
+didn't fill in that information. Let's see how the data shown above looks after
+filling in this information.
+
+\vspace{.2in}
+\tiny
+```{r numfill, echo = FALSE}
+merged_dat <- merge_dat %>% dplyr::group_by(subject_id) %>%
+             tidyr::fill(gender, age, sapsi_first, sofa_first, bmi,
+                  care_unit, admission_type_descr, los_icu, los_hospital)
+data.frame(merged_dat)[c(58:61),]
+```
+\normalsize
+\vspace{.2in}
+
+There are some cases when missing values needed to be filled in using a *later*
+entry, because there are no prior entries without NA. This is the case for 173
+subjects. Here's an example of how it looks.
+
+\vspace{.2in}
+\tiny
+```{r, echo = FALSE}
+data.frame(merged_dat)[c(22919:22921),]
+```
+\normalsize
+\vspace{.2in}
+
+The column `periode` refers to the "number of the patient’s period". For these
+173 subjects, the minimum `periode` is always 2 or higher. Thus, the merge
+filled in something like `periode` 1 for these subjects.
+
+There was probably a reason for omitting `periode` 1 for these subjects, maybe
+the time-varying treatment data was unavailable. I can remove `periode` 1 from
+these subjects later if need be.  
+
+```{r numupfill, echo = FALSE, message = FALSE, warning = FALSE}
+s1 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_age = sum(is.na(age)))
+s2 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_gender = sum(is.na(gender)))
+s3 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_sofa = sum(is.na(sofa_first)))
+s4 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_sapsi = sum(is.na(sapsi_first)))
+s5 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_ad = sum(is.na(admission_type_descr)))
+s6 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_hospital = sum(is.na(los_hospital)))
+s7 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_careunit = sum(is.na(care_unit)))
+s8 <- merged_dat %>% dplyr::group_by(subject_id) %>%
+  dplyr::summarize(na_icu = sum(is.na(los_icu)))
+res <- Reduce(merge, list(s1, s2, s3, s4, s5, s6, s7, s8))
+res <- res[apply(res[,-1], 1, function(x) !all(x==0)),]
+s9 <- merged_dat %>% dplyr::group_by(subject_id) %>% dplyr::summarize(n = n())
+res <- left_join(res, s9)
+o <- merged_dat[(merged_dat$subject_id %in% res$subject_id),]
+# o %>% group_by(subject_id) %>% summarize(min(periode, na.rm = TRUE))
+
+merged_dat <- merged_dat %>% dplyr::group_by(subject_id) %>%
+             tidyr::fill(gender, age, sapsi_first, sofa_first, bmi,
+                  care_unit, admission_type_descr, los_icu, los_hospital,
+                  .direction = "up")
+```
+
+\vspace{.2in}
+
+Something else I noticed about `periode` when examining this issue. Below I
+listed all of the unique `periode` available for the subject above,
+`subject_id` = 439.
+
+\vspace{.2in}
+\tiny
+```{r s439, echo = FALSE}
+s439 <- o %>% filter(subject_id == 439)
+unique(s439$periode)
+```
+\normalsize
+\vspace{.2in}
+
+Interestingly, this subject is missing some of the `periode` (e.g., 9-11). The
+data that would have been `periode` 9-11 is available in `numerics`, but this
+information not included in the preprocessed data `df`. Perhaps because the
+time-varying treatment data was not available.
+
+## Classifying a hypotensive event
+
+Like before, I created a new outcome `Y1` to classify hypotensive events. The
+issue with adjacent time points occasionally being 30 minutes apart is not
+present in this scenario, since there is no gap period.
+
+```{r nogap, echo = FALSE}
+mimic_nogap <- new_Y_sol1(merged_dat, cutoff = 65)
+```
+
+## Summary
+
+This updated data frame with the full data still contains 797 subjects and is
+named `mimic_nogap`. This updated data does not contain
+
+* NA values for any baseline characteristic variable except `bmi`,
+* outcome measurement error outliers,
+* single subject id's which represent multiple patients,
+* patients with less than 90 minutes of data,
+* or the gap period of 30 minutes after every hour of data.
+
+This `mimic_nogap` data frame does contain
+
+* a new hypotensive event outcome `Y1` which classifies a hypotensive event as
+  one when the current `abpmean` is less than 65 and at least 5 adjacent time
+  points have `abpmean` less than 65;
+* subject's with erroneous baseline characteristic measurements, including
+  - `subject_id` = 20936 with `age` of 200,
+  - and many subjects with odd `bmi` values such as 4, 5, 9, 77, 69, 22436;
+* NA values during the merged in 30 minute gap period for
+  - time-varying treatments `amine` `sedation` `ventilation`,
+  - and `periode` `time` `event`.
+
+The `mimic_nogap` data is saved in `mimic_nogap.Rdata`.
+
+```{r savenogap, echo = FALSE, eval = FALSE}
+mimic_nogap <- mimic_nogap[order(mimic_nogap$subject_id,
+                                 mimic_nogap$time_and_date), ]
+save(mimic_nogap, file = here::here("Data","mimic_nogap.Rdata"),
+     compress = TRUE)
+```
+
+### Important Note
+
+Because `mimic_nogap` considered the full data, two of the preprocessing steps
+in `mimic_nogap` are more reliable than those in `mimic`.
+
+1. The new hypotensive event outcome `Y1` relies on adjacent time points for
+   classification. Since `mimic_nogap` does not contain 30-minute gaps with no
+   data, the adjacent time points are closer together in `mimic_nogap`.
+2. There are many instances when `abpmean` has a value, but `abpsys` and
+   `abpdias` are both zero. Sometimes these oddities appear to be consistent
+   with the patients "normal" readings (i.e., readings which have non-zero
+   values for `abpmean`, `abpsys` and `abpdias`). In other cases, these
+   oddities are very different from the patients normal readings. I remove the
+   inconsistent oddities by calculating subject specific `abpmean` outlier
+   thresholds, which requires calculating subject specific IQRs. These IQRs are
+   more accurate in `mimic_nogap`, since the full data is used.
+
+For these reasons, I used `mimic_nogap` to recreate the same gaps that are in
+`mimic`. I called this data frame `mimic_gap` and saved it in `mimic_gap.Rdata`.
+
+I recommend using the `mimic_gap` data instead of `mimic` data.
+
+```{r savegap, echo = FALSE, eval = FALSE}
+mimic_gap <- mimic_nogap[!is.na(mimic_nogap$event),]
+save(mimic_gap, file = here::here("Data", "mimic_gap.Rdata"), compress = TRUE)
+```
