@@ -1,5 +1,5 @@
-#Evaluate the loss:
-#Binary Cross-Entropy / Log Loss
+##Evaluate the loss:
+#Binary outcome: Binary Cross-Entropy / Log Loss
 eval_loss <- function(ps, y){
   
   #Per row operation, so across all validation time-points.
@@ -17,6 +17,17 @@ eval_loss <- function(ps, y){
   return(loss=loss)
 }
 
+#Continuous outcome: MSE
+eval_loss_cont <- function(ps, y){
+  
+  #Per row operation, so across all validation time-points.
+  loss<-apply(ps, 1, function(p){
+    #This is now sum over all h time-points
+    estloss<-sum((p-y)^2, na.rm = TRUE)
+    estloss})
+  
+  return(loss=loss)
+}
 #####################
 ### Global learner
 #####################
@@ -25,12 +36,14 @@ global_SL = function(t){
   #Pool across time (fitting on all data up to time t)
   #Here, we imposse a Markov order assumption (independence between times)
   
+  ##This treats time points and samples as independent. 
+  #Since here we are pulling across time, this should be ok
+  
   test_data <- train_all[train_all$time<=t,]
   
   #TO DO: Find a smart way to pull across time and samples, and have
   #validation be samples in the next time for all samples.
   
-  #Set up proper cross-validation for time-series data:
   #folds <- origami::make_folds(test_data,
   #                             fold_fun = folds_rolling_window,
   #                             window_size = training_size,
@@ -74,7 +87,7 @@ individual_SL = function(t,id,first_window,test_size,mini_batch){
   #Subset to sample with subject id id
   train_one <- train_all[train_all$subject_id %in% id,]
   
-  #Pool across all samples and all time point until time t:
+  #Use data until time point until time t:
   test_data <- train_one[train_one$time<=t,]
   
   #Set up proper cross-validation for time-series data:
@@ -117,17 +130,16 @@ individual_SL = function(t,id,first_window,test_size,mini_batch){
 ### For each t, derive weights at horizon h
 #t: time until which we train the SuperLearners
 #gap: time between the last trained time point and the first prediction time point
-#h: horizon at which we evaluate the loss
+#h: length of horizon at which we evaluate the loss
 #train_all: the full dataset used
 #first_window: size of the training set (for example, 1 to first window).
 #test_size: size of the validation set (in time points).
 #mini_batch: by how many time points to increase the training set after the first iteration?
+#outcome: name of the outcome column.
 
 combine_SL = function(t,gap,h,train_all,
-                      first_window, test_size,mini_batch){
-  
-  num_p<-(t+h)-(t)
-  
+                      first_window, test_size,mini_batch,outcome){
+
   #Get all the individual samples:
   samples <- unique(train_all$subject_id)
   
@@ -156,10 +168,10 @@ combine_SL = function(t,gap,h,train_all,
   pred_regular_SL <- lapply(tasks_baseline, function(task){global_SL_t$regularSL$predict(task)})
   #Global SL:
   pred_global_SL <- lapply(tasks, function(task){matrix(unlist(lapply(1:lrn, function(x){
-    global_SL_t$globalSL$fit_object$learner_fits[[x]]$predict(task)})),nrow=num_p,ncol=lrn)})
+    global_SL_t$globalSL$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
   #Global SL with baseline covariates:
   pred_global_SL_baseline <- lapply(tasks_baseline, function(task){matrix(unlist(lapply(1:lrn, function(x){
-    global_SL_t$globalSL_baseline$fit_object$learner_fits[[x]]$predict(task)})),nrow=num_p,ncol=lrn)})
+    global_SL_t$globalSL_baseline$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
   #Global SL with screeners:
   pred_global_SL_screen <- lapply(tasks, function(task){
     p<-global_SL_t$globalSL_screen$fit_object$learner_fits[[1]]$predict(task)
@@ -173,7 +185,7 @@ combine_SL = function(t,gap,h,train_all,
   #Individual SL:
   pred_individual_SL<-lapply(seq_along(tasks), function(i){
     matrix(unlist(lapply(1:lrn, function(x){
-      individual_SL_t[[i]]$individualSL$fit_object$learner_fits[[x]]$predict(tasks_baseline[[i]])})),nrow=num_p,ncol=lrn)
+      individual_SL_t[[i]]$individualSL$fit_object$learner_fits[[x]]$predict(tasks_baseline[[i]])})),nrow=h,ncol=lrn)
   })
   #Regular Individual SL:
   #pred_regular_individual_SL<-lapply(seq_along(tasks), function(i){
@@ -199,19 +211,31 @@ combine_SL = function(t,gap,h,train_all,
   #Get the truth:
   truths <- lapply(samples, function(x){
     train_one <- train_all[train_all$subject_id %in% x,]
-    train_one[(t+1+gap):(t+gap+h),"event"][[1]]
+    train_one[(t+1+gap):(t+gap+h), outcome][[1]]
   })
   
   #Evaluate the loss for discrete learners, for each sample:
-  loss <- lapply(seq_along(tasks), function(i){eval_loss(preds[[i]],truths[[i]])})
+  if(dim(unique(train_all[,outcome]))[1]>2){
+    #Continuous outcome
+    loss <- lapply(seq_along(tasks), function(i){eval_loss_cont(preds[[i]],truths[[i]])})
+  }else{
+    #Binary outcome
+    loss <- lapply(seq_along(tasks), function(i){eval_loss(preds[[i]],truths[[i]])})
+  }
   
   #Assign weights to discrete learners:
   get_weights = function(ps,y,l){
-    #Gives a coefficient based on ALL the predictions (NOT time specific!)
-    fit_coef <- nnls::nnls(t(ps), y)
-    fit_coef<-fit_coef$x
     
-    #PROBLEM: If no weights given, distribute weights based the loss?
+    #Gives a coefficient based on ALL the predictions (NOT time specific!)
+    fit_coef <- nnls::nnls(t(as.matrix(ps)), (y))
+    fit_coef <- fit_coef$x
+    
+    if(sum(fit_coef)==0){
+      warning("All algorithms have zero weight", call. = FALSE)
+      
+    }
+    
+    #PROBLEM: If no weights given, distribute weights based on the loss?
     #if(sum(fit_coef)==0){
     #This "rewards" learnes with the smallest loss, but barely.
     #fit_coef<-as.numeric(l)
@@ -222,9 +246,22 @@ combine_SL = function(t,gap,h,train_all,
     #fit_coef[which.min(l)]<-1
     #}
     
-    if(sum(fit_coef)>1){
-      fit_coef<-fit_coef/sum(fit_coef)
-    }
+    #TO DO: But why is it necessary for the coefficients to sum to 1?
+    #if(sum(fit_coef)>0){
+    #  fit_coef<-fit_coef/sum(fit_coef)
+    #}else if(sum(fit_coef)==0){
+    #  warning("All algorithms have zero weight", call. = FALSE)
+      #Give all weight to the discrete learner:
+      #fit_coef[which.min(l)]<-1
+    ##NOTE: SuperLearner does not do this!  
+    #Might cause issue with regular SL comparison?
+    #}else if(sum(fit_coef)<1 && sum(fit_coef)!=0){
+      #Give all weight to the discrete learner:
+      #fit_coef<-rep(0,length(l))
+      #fit_coef[which.min(l)]<-1 
+    #  fit_coef<-fit_coef
+    #}
+    
     return(fit_coef)
   }
   
@@ -246,14 +283,23 @@ combine_SL = function(t,gap,h,train_all,
   
   #Evaluate loss over final SuperLearners!
   #Note that this is the loss over validation samples
-  loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(preds_fin[[i]]),truths[[i]])}))
-  loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_SL[[i]]),truths[[i]])}))
-  #loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_individual_SL[[i]]),truths[[i]])}))
+  #Evaluate the loss for discrete learners, for each sample:
+  if(dim(unique(train_all[,outcome]))[1]>2){
+    #Continuous outcome
+    loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(preds_fin[[i]]),truths[[i]])}))
+    loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_regular_SL[[i]]),truths[[i]])}))
+    #loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_regular_individual_SL[[i]]),truths[[i]])}))
+  }else{
+    #Binary outcome
+    loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(preds_fin[[i]]),truths[[i]])}))
+    loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_SL[[i]]),truths[[i]])}))
+    #loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_individual_SL[[i]]),truths[[i]])}))
+  }
+  
   losses_all<-cbind.data.frame(loss_online_SL=loss_online_SL,
                                loss_regular_SL=loss_regular_SL)
   #loss_individual_SL=loss_individual_SL
-  
-  
+
   return(list(#Final, weighted prediction.
     preds_fin=preds_fin, 
     #Final, weighted prediction for the regular SL
