@@ -1,0 +1,157 @@
+---
+title: "Continuous vs. Binary prediction for Combined SL and Regular SL over time"
+output: pdf_document
+---
+
+```{r}
+### Goal(s):
+# Test continous outcome vs. binary
+# Global learner will fit towards the "group prediction"
+# Individual learner will fit towards the "individual prediction"
+# Allow for few learners to smooth or stratify over the baseline covariates
+```
+
+```{r}
+#Load necessary libraries:
+library(sl3)
+library(origami)
+library(lsei)
+library(here)
+library(SuperLearner)
+library(dplyr)
+require(rlist)
+source(here::here("R/CombinedOnlineSL.R"))
+source(here::here("R/utils_mimic.R"))
+```
+
+```{r,echo=FALSE}
+
+#######################################
+# Data processing
+#######################################
+
+#Load the data (preprocessed by RP and IM)
+#Total of 797 subjects
+load(here::here("Data/mimic_im.Rdata"))
+df<-mimic
+
+#Pick 500 samples that have period 1,2 3, 4 and 5:
+train_all <- sample_n_t(df, n = 400, t=5)
+
+#Leftover NAs: bmi
+summary(train_all)
+train_all <- train_all[,-c(8)]
+
+#Specify the covariates and outcome:
+outcome <- "abpmean"
+#TO DO: With so many having abpsys/abpdias 0/0, is it even worth keeping it?
+covars_wbaseline <- c("gender","age","care_unit", "admission_type_descr", 
+                      "sapsi_first", "sofa_first",
+                      "amine","sedation","ventilation","spo2","abpsys",
+                      "abpdias")
+covars <- c("amine","sedation","ventilation","spo2","abpsys","abpdias")
+```
+
+```{r}
+
+#######################################
+# Set the SL libraries
+#######################################
+
+### Learners as is:
+#Create a grid for xgboost:
+#grid_params = list(nrounds = c(500, 1000), max_depth=c(3,6,10),
+#                   eta = c(0.001, 0.01, 0.1))
+grid_params = list(max_depth=c(3,6),
+                   eta = c(0.001, 0.01, 0.1, 0.2))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+  })
+lrnr_glm <- Lrnr_glm_fast$new()
+
+# A stack combines multiple learners by training them simultaneously
+# their predictions can be either combined, or compared.
+#TO DO: This needs a better implementation
+
+#stack <- make_learner(
+#  Stack, lrnr_glm, xgb_learners[[1]], xgb_learners[[2]], xgb_learners[[3]],
+#  xgb_learners[[4]], xgb_learners[[5]], xgb_learners[[6]], xgb_learners[[7]],
+#  xgb_learners[[8]], xgb_learners[[9]], xgb_learners[[10]], xgb_learners[[11]],
+#  xgb_learners[[12]], xgb_learners[[13]], xgb_learners[[14]], xgb_learners[[15]],
+#  xgb_learners[[16]], xgb_learners[[17]], xgb_learners[[18]]
+#)
+stack <- make_learner(
+  Stack, lrnr_glm, xgb_learners[[1]], xgb_learners[[2]], xgb_learners[[3]],
+  xgb_learners[[4]], xgb_learners[[5]], xgb_learners[[6]], xgb_learners[[7]], xgb_learners[[8]]
+)
+
+### Learners with screeners:
+screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
+cor_pipeline <- make_learner(Pipeline, screen_cor, stack)
+stack_screen <- make_learner(Stack, cor_pipeline, stack)
+
+###Regular Super-Learner option:
+metalearner <- make_learner(Lrnr_nnls)
+sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
+
+```
+
+```{r, echo=FALSE}
+
+###Issues:
+#Gap between training and prediction.
+#Note that at hour marks, there is a natural 30 minute gap. 
+#But if we train at 20 minutes, there is not. 
+
+#For how many minutes in the future the prediction occurs?
+h<-20
+#Size of the initial training set:
+first_window=10
+#Size of the test set:
+test_size=10
+#Increase the size of the training set by this ammount:
+mini_batch=5
+
+#######################################
+## Compare SL weights at different t
+
+#Get all the individual samples:
+res_t30_bin<-combine_SL(t=30,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t30_cont<-combine_SL(t=30,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t60_bin<-combine_SL(t=60,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t60_cont<-combine_SL(t=60,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t90_bin<-combine_SL(t=90,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t90_cont<-combine_SL(t=90,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t120_bin<-combine_SL(t=120,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t120_cont<-combine_SL(t=120,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t150_bin<-combine_SL(t=150,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t150_cont<-combine_SL(t=150,h=h,gap=30,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t180_bin<-combine_SL(t=180,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t180_cont<-combine_SL(t=180,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+res_t240_bin<-combine_SL(t=240,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="Y1")
+res_t240_cont<-combine_SL(t=240,h=h,gap=0,train_all,first_window,test_size,mini_batch,outcome="abpmean")
+
+list.save(res_t30_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t30.Rdata"))
+list.save(res_t30_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t30.Rdata"))
+list.save(res_t60_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t60.Rdata"))
+list.save(res_t60_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t60.Rdata"))
+list.save(res_t90_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t90.Rdata"))
+list.save(res_t90_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t90.Rdata"))
+list.save(res_t120_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t120.Rdata"))
+list.save(res_t120_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t120.Rdata"))
+list.save(res_t150_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t150.Rdata"))
+list.save(res_t150_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t150.Rdata"))
+list.save(res_t180_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t180.Rdata"))
+list.save(res_t180_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t180.Rdata"))
+list.save(res_t240_cont, here("Results/Cont_vs_Bin/Cont_TimeStep_t240.Rdata"))
+list.save(res_t240_bin, here("Results/Cont_vs_Bin/Bin_TimeStep_t240.Rdata"))
+
+```

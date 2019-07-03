@@ -1,0 +1,258 @@
+---
+title: "Continuous vs. Binary over varying training size"
+author: "Ivana Malenica"
+date: "Summer, 2019"
+output:
+  pdf_document:
+    includes:
+      in_header: header.sty
+subparagraph: true
+---
+
+\section{Comparison of continuous and binary outcome prediction based on the subset of data}
+
+The below results summarize a test run comparing the Combined Online SL and Regular SL at various time points, for both the continuous and binary outcome.
+ 
+1. Combined Online SL: consists of both global and individualized learners, as well as various variations of the global learners that differentially adjust for baseline covariates.
+
+2. Regular SL: just global SL.
+
+The prediction is based on the following covariates:
+
+1. Baseline and Time-varying: "gender", "age", "care_unit", "admission_type_descr", "sapsi_first", "sofa_first", "amine","sedation","ventilation","spo2","abpsys",  "abpdias" 
+
+2. Baseline: "amine","sedation","ventilation","spo2","abpsys","abpdias"
+
+Initial training size included $n=400$ samples, trained at $t=\{30, 60, 90, 120, 150, 180, 240\}$ minutes. For each $t$, we follow a gap of $30$ minutes and predict the event for the following 20 minutes after the gap.
+
+```{r, echo=FALSE}
+#Load necessary libraries:
+options(warn=-1)
+suppressMessages(library(xtable))
+suppressMessages(library(here))
+suppressMessages(library(pROC))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(reshape))
+options(xtable.comment = FALSE)
+
+#Load the data:
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t30.Rdata"))
+res_cont_t30<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t30.Rdata"))
+res_bin_t30<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t60.Rdata"))
+res_cont_t60<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t60.Rdata"))
+res_bin_t60<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t90.Rdata"))
+res_cont_t90<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t90.Rdata"))
+res_bin_t90<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t120.Rdata"))
+res_cont_t120<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t120.Rdata"))
+res_bin_t120<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t150.Rdata"))
+res_cont_t150<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t150.Rdata"))
+res_bin_t150<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t180.Rdata"))
+res_cont_t180<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t180.Rdata"))
+res_bin_t180<-x
+load(here("Results/Cont_vs_Bin/Cont_TimeStep_t240.Rdata"))
+res_cont_t240<-x
+load(here("Results/Cont_vs_Bin/Bin_TimeStep_t240.Rdata"))
+res_bin_t240<-x
+```
+
+```{r, echo=FALSE}
+#Some necessary calculations for binary outcome:
+
+calculations = function(res){
+
+  #AUC over ALL validation time-points
+  pred_fin<-data.frame(pred=unlist(res$preds_fin))
+  pred_regSL<-data.frame(pred=unlist(res$pred_regular_SL))
+  truth<-data.frame(truth=unlist(res$truth))
+
+  #(averaged over time and all samples):
+  loss<-colMeans(res$losses_all)
+  names(loss)<-names(res$losses_all)
+  
+  #Look at the weights as an average over all samples:
+  weights<-as.data.frame(res$fit_coef)
+  toDelete <- seq(1, dim(weights)[2], 2)
+  weights <-  weights[,-toDelete]
+  weight<-data.frame(rowMeans(weights))
+  names(weight)<-"Coefficient"
+  row.names(weight)<-res$fit_coef[[1]]$learners
+  weight<-weight/sum(weight)
+
+  #Make a more general category:
+  #1. picks the best algorithm from each category? 
+  #2. averages over the algorithms?
+  
+  weight$SL_type<-NA
+  weight[grepl("GlobalSL_screenbaseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen_Baseline"
+  weight[grepl("GlobalSL_baseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Baseline"
+  weight[grepl("GlobalSL_screen_", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen"
+  weight[grepl("IndividualSL_", row.names(weight), fixed = TRUE),"SL_type"]<-"IndividualSL"
+  weight[is.na(weight$SL_type),"SL_type"]<-"GlobalSL"
+  
+  #1. Best algorithm from each category
+  max_SL_type <- weight %>% group_by(SL_type) %>% summarise(max=max(Coefficient))
+  #2. Average of algorithms for each category
+  ave_SL_type <- weight %>% group_by(SL_type) %>% summarise(ave=mean(Coefficient))
+
+  return(list(pred_fin=pred_fin,
+              pred_regSL=pred_regSL,
+              truth=truth,
+              loss=loss,
+              weight=weight,
+              max_SL_type=max_SL_type,
+              ave_SL_type=ave_SL_type))
+}
+
+calc_bin_t30<-calculations(res_bin_t30)
+calc_bin_t60<-calculations(res_bin_t60)
+calc_bin_t90<-calculations(res_bin_t90)
+calc_bin_t120<-calculations(res_bin_t120)
+calc_bin_t150<-calculations(res_bin_t150)
+calc_bin_t180<-calculations(res_bin_t180)
+calc_bin_t240<-calculations(res_bin_t240)
+
+loss_bin_all_t<-t(cbind.data.frame(calc_bin_t30$loss,calc_bin_t60$loss,calc_bin_t90$loss,
+                              calc_bin_t120$los,calc_bin_t150$loss,calc_bin_t180$loss,calc_bin_t240$loss))
+row.names(loss_bin_all_t)<-c("t=30","t=60","t=90","t=120","t=150","t=180","t=240")
+
+```
+
+```{r, echo=FALSE}
+#Some necessary calculations for the continuous outcome:
+
+new_Y_sol1_edit = function(preds_fin, window=5, cutoff=65){
+  preds_fin_bin<-apply(preds_fin, 2, function(preds){
+    init <- ifelse(preds < cutoff,1,0)
+    #Sum the lags around each possible event.
+    lags<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lag(init,x))), na.rm = TRUE)
+    leads<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lead(init,x))), na.rm = TRUE)
+    mids<-lags+leads
+    event<-ifelse((init==1 & mids >= 5),1,0)
+    event
+  })
+  return(preds_fin_bin)
+}
+
+calculations_cont = function(res, res_bin){
+  
+  #Convert the predicted continuous variable to binary:
+  preds_fin<-as.list(new_Y_sol1_edit(data.frame(res$preds_fin)))
+  
+  #AUC over ALL validation time-points
+  pred_fin<-data.frame(pred=unlist(preds_fin))
+  pred_regSL<-data.frame(pred=unlist(res$pred_regular_SL))
+  truth<-data.frame(truth=unlist(res_bin$truth))
+
+  #(averaged over time and all samples):
+  loss<-colMeans(res$losses_all)
+  names(loss)<-names(res$losses_all)
+  
+  #Look at the weights as an average over all samples:
+  weights<-as.data.frame(res$fit_coef)
+  toDelete <- seq(1, dim(weights)[2], 2)
+  weights <-  weights[,-toDelete]
+  weight<-data.frame(rowMeans(weights))
+  names(weight)<-"Coefficient"
+  row.names(weight)<-res$fit_coef[[1]]$learners
+  weight<-weight/sum(weight)
+
+  #Make a more general category:
+  #1. picks the best algorithm from each category? 
+  #2. averages over the algorithms?
+  
+  weight$SL_type<-NA
+  weight[grepl("GlobalSL_screenbaseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen_Baseline"
+  weight[grepl("GlobalSL_baseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Baseline"
+  weight[grepl("GlobalSL_screen_", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen"
+  weight[grepl("IndividualSL_", row.names(weight), fixed = TRUE),"SL_type"]<-"IndividualSL"
+  weight[is.na(weight$SL_type),"SL_type"]<-"GlobalSL"
+  
+  #1. Best algorithm from each category
+  max_SL_type <- weight %>% group_by(SL_type) %>% summarise(max=max(Coefficient))
+  #2. Average of algorithms for each category
+  ave_SL_type <- weight %>% group_by(SL_type) %>% summarise(ave=mean(Coefficient))
+
+  return(list(pred_fin=pred_fin,
+              pred_regSL=pred_regSL,
+              truth=truth,
+              loss=loss,
+              weight=weight,
+              max_SL_type=max_SL_type,
+              ave_SL_type=ave_SL_type))
+}
+
+calc_cont_t30<-calculations_cont(res=res_cont_t30, res_bin=res_bin_t30)
+calc_cont_t60<-calculations_cont(res_cont_t60, res_bin_t60)
+calc_cont_t90<-calculations_cont(res_cont_t90, res_bin_t90)
+calc_cont_t120<-calculations_cont(res_cont_t120, res_bin_t120)
+calc_cont_t150<-calculations_cont(res_cont_t150, res_bin_t150)
+calc_cont_t180<-calculations_cont(res_cont_t180, res_bin_t180)
+calc_cont_t240<-calculations_cont(res_cont_t240, res_bin_t240)
+
+loss_cont_all_t<-t(cbind.data.frame(calc_cont_t30$loss,calc_cont_t60$loss,calc_cont_t90$loss,
+                              calc_cont_t120$los,calc_cont_t150$loss,calc_cont_t180$loss,
+                              calc_cont_t240$loss))
+row.names(loss_cont_all_t)<-c("t=30","t=60","t=90","t=120","t=150","t=180","t=240")
+
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t30$truth$truth, calc_bin_t30$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=30")
+pROC::plot.roc(calc_cont_t30$truth$truth, calc_cont_t30$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t60$truth$truth, calc_bin_t60$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=60")
+pROC::plot.roc(calc_cont_t60$truth$truth, calc_cont_t60$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t90$truth$truth, calc_bin_t90$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=90")
+pROC::plot.roc(calc_cont_t90$truth$truth, calc_cont_t90$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t120$truth$truth, calc_bin_t120$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=120")
+pROC::plot.roc(calc_cont_t120$truth$truth, calc_cont_t120$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t150$truth$truth, calc_bin_t150$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=150")
+pROC::plot.roc(calc_cont_t150$truth$truth, calc_cont_t150$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t180$truth$truth, calc_bin_t180$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=180")
+pROC::plot.roc(calc_cont_t180$truth$truth, calc_cont_t180$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
+
+```{r, echo=FALSE}
+par(pty="s")
+roc(calc_bin_t240$truth$truth, calc_bin_t240$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=240")
+pROC::plot.roc(calc_cont_t240$truth$truth, calc_cont_t240$pred_fin$pred, col="#4daf4a", lwd=4, print.auc=TRUE, add=TRUE, print.auc.y=0.3)
+legend("bottomright", legend=c("Binary Outcome", "Continuous Outcome"), col=c("#377eb8", "#4daf4a"), lwd=4)
+```
