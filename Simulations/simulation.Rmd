@@ -215,57 +215,6 @@ run_auto_arima <- function(df, outcome = "abpmean") {
   # for each sample:
   fit_list <- lapply(samples, function(x){
 
-    # subset data to only contain that sample and make sure it's in order
-    sub <- df[df$subject_id == x, ]
-    sub_ord <- sub[order(sub$time_and_date), ]
-
-    abp <- ts(as.numeric(unlist(sub_ord[,which(colnames(sub_ord)==outcome)])),
-              start = min(sub_ord$min_elapsed), end = max(sub_ord$min_elapsed))
-
-    k <- 60 # minimum data length for fitting a model
-    n <- length(abp)
-    st <- tsp(abp)[1]+(k-1)
-    increments <- seq(1, n-k-40, by = 20) # training sets increment by 20 values
-
-    model_list <- lapply(increments, function(v){
-
-      xshort <- window(abp, end = st + v)
-      xnext <- window(abp, start = st + v + 1, end = st + v + 40)
-      fit <- auto.arima(xshort, approximation = FALSE, stepwise = FALSE)
-      fcast <- forecast(fit, h = 40)
-      mape <- abs((fcast[['mean']]-xnext)/xnext)[25:35]
-      names(mape) <- seq(25, 35, 1)
-      return(list(mape = mape, fit = fit))
-
-    })
-
-    names(model_list) <- increments
-    model <- lapply(model_list, FUN = `[[`, "fit")
-    mape <- lapply(model_list, FUN = `[[`, "mape")
-    acc_df <- bind_rows(mape)
-    acc_summ <- rowMeans(acc_df)
-    name <- paste("id", x, sep = "_")
-    accuracy <- data.frame(name, t(acc_summ))
-    colnames(accuracy) <- c("subject", seq(25, 35, 1))
-    return(list(accuracy = accuracy, model = model))
-
-  })
-
-  names(fit_list) <- samples
-  models <- lapply(fit_list, FUN = `[[`, "model")
-  names(models) <- samples
-  acc <- lapply(fit_list, FUN = `[[`, "accuracy")
-  accuracy <- bind_rows(acc)
-  return(list(mape = accuracy, model = models))
-}
-
-run_auto_arima <- function(df, outcome = "abpmean") {
-
-  samples <- unique(df$subject_id)
-
-  # for each sample:
-  fit_list <- lapply(samples, function(x){
-
     # 1. subset data to only contain that sample and make sure it's in order
     sub <- df[df$subject_id == x, ]
     sub_ord <- sub[order(sub$time_and_date), ]
@@ -365,10 +314,8 @@ but I do not consider that procedure in this assessment of model accuracy.
 
 \vspace{.2in}
 
-We examine the accuracy of one-step ahead forecasts with the mean absolute error 
+We examined the accuracy of one-step ahead forecasts with the mean absolute error 
 (MAE)  = $\text{mean}(|e_t|)$.
-
-\vspace{.2in}
 
 ```{r, echo = FALSE, message = FALSE, warning = FALSE}
 load(here::here("Results","arima_hypo.Rdata"))
@@ -391,8 +338,6 @@ acc_nonhypo %>%
   kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
                 position = "center")
 ```
-
-\vspace{.2in}
 
 We plot a few of these forecasts to examine the best model fits according to the 
 MAE. We also plot model fits that are just below MAE > 2, since we will consider 
@@ -459,26 +404,29 @@ nonhypo_good_names <- nonhypo_good_names[nonhypo_good_names %in%
 ## Examine coefficients for ARIMA model fits included in simulation
 
 ```{r, echo = FALSE, message = FALSE, warning = FALSE}
+summ_hypo$subject_id <- as.numeric(as.character(summ_hypo$subject_id))
+hypo_coef$subject_id <- as.numeric(as.character(hypo_coef$subject_id))
 hypo_coef_W <- left_join(hypo_coef, summ_hypo)
 hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar1))
 hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar2))
 hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar3))
 hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar4))
 hypo_coef_W %>%
-  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+  kable(format = "latex", booktabs = T, digits = 2, longtable = T,
         caption = "ARIMA model coefficients and baseline characteristics among hypotensive patients included in simulation") %>%
-  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 4,
                 position = "center")
-
+summ_nonhypo$subject_id <- as.numeric(as.character(summ_nonhypo$subject_id))
+nonhypo_coef$subject_id <- as.numeric(as.character(nonhypo_coef$subject_id))
 nonhypo_coef_W <- left_join(nonhypo_coef, summ_nonhypo)
 nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar1))
 nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar2))
 nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar3))
 nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar4))
 nonhypo_coef_W %>%
-  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+  kable(format = "latex", booktabs = T, digits = 2, longtable = T,
         caption = "ARIMA model coefficients and baseline characterstics among nonhypotensive patients included in simulation") %>%
-  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 4,
                 position = "center")
 ```
 
@@ -584,7 +532,7 @@ both_sim <- both_sim[,-7]
 save(both_sim, file = here::here("Results", "both_sim.Rdata"), compress = TRUE)
 ```
 
-# 5. Fit combined super learner
+# Fit combined super learner
 
 We fit the combined (global and individual) super learner across a range
 of training data lengths. Also, we fit the combined 
@@ -593,9 +541,6 @@ super learner to simulated data from
 1. patients that experienced a hypotensive event, 
 2. patients that did not experience a hypotensive event, and 
 3. all patients included in the simulation. 
-
-Due to time constraints we only fit the combined super learner to simulated data 
-from 3.
 
 \vspace{.2in}
 
@@ -634,7 +579,7 @@ quite yet.
 
 \vspace{.2in}
 
-**How should the combined super perform given the simulated data?** 
+## How should the combined super perform given the simulated data?
 
 Since an individual model was fit to each subject, we would imagine that the 
 individual super learner would consistently outperform the global super learner. 
@@ -742,7 +687,7 @@ comSLsim_both_cont <- run_comSLsim(type_dat = "both", type_outcome = "cont")
 save(comSLsim_both_cont, file = here::here("Results", "comSLsim_both_cont.Rdata"))
 ```
 
-# 6. Calculate performance metrics of combined super learner
+# Calculate performance metrics of combined super learner
 
 We evaluate the performance of the combined super learner for each sample 
 individually, so learner weights are individualized. The global super learner 
@@ -760,7 +705,7 @@ nature to the predictions.
 The loss of the combined super learner is a sum over all of the samples, 
 evaluated only over the validation time points, a 30 minute horizon. 
 
-```{r, echo = FALSE, message = FALSE, warning = FALSE}
+```{r, echo = FALSE, message = FALSE, warning = FALSE, eval = FALSE}
 load(here::here("Results", "comSLsim_hypo_bin.Rdata"))
 load(here::here("Results", "comSLsim_hypo_cont.Rdata"))
 load(here::here("Results", "comSLsim_nonhypo_bin.Rdata"))
@@ -817,7 +762,7 @@ run_loss(calcs_both$calc_all_cont) %>%
   kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
 ```
 
-```{r, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE, fig.align = "center"}
+```{r, echo = FALSE, eval = FALSE, message = FALSE, warning = FALSE, fig.align = "center"}
 weight_all_ave<-t(cbind.data.frame(calc_both_t100$ave_SL_type[2],
                                    calc_both_t300$ave_SL_type[2],
                                    calc_both_t500$ave_SL_type[2]))
@@ -836,7 +781,7 @@ ggplot(weight_all_ave, aes(x = Time, y = value, colour = variable)) +
 
 ```
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, eval = FALSE}
 plot_auc <- function(calcs_bin, calcs_cont, type) {
   
   bin_truth <- lapply(calcs_bin, function(x) x$truth$truth)
@@ -873,7 +818,7 @@ plot_auc(calcs_bin = calcs_both$calc_all_bin,
 ```
 
 
-```{r, echo=FALSE, eval=TRUE}
+```{r, echo=FALSE, eval = FALSE}
 weight_all_ave<-t(cbind.data.frame(lapply(calc_all_bin, function(x) x$ave_SL_type[2])))
 
 row.names(weight_all_ave)<- as.character(times)
@@ -886,7 +831,7 @@ ggplot(weight_all_ave, aes(x=Time,y=value,colour=variable)) + geom_line(aes(grou
 
 ```
 
-# 7. Next steps
+Next steps
 
 * Create simulations where global super learner should outperform individual.
 * Add rolling origin cross-validation to global super learner, while still 
