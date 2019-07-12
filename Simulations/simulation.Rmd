@@ -1,0 +1,931 @@
+---
+title: "Time Series Simulation"
+author: "Rachael Phillips"
+date: "19 June 2019"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{lscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{float}
+---
+
+```{r setup, echo = FALSE}
+options(warn=-1)
+suppressMessages(library(xtable))
+suppressMessages(library(here))
+suppressMessages(library(pROC))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(reshape2))
+suppressMessages(library(forecast))
+suppressMessages(library(kableExtra))
+suppressMessages(library(sl3))
+suppressMessages(library(origami))
+suppressMessages(library(SuperLearner))
+suppressMessages(library(data.table))
+options(xtable.comment = FALSE)
+source(here::here("R", "utils_mimic.R"))
+```
+
+# Overview {-}
+
+We may be interested in a few contexts for simulation.
+
+* Pure prediction
+* Causal effect of baseline treatment
+* Causal effect of time-varying treatment
+
+The simulation presented is for the context of pure prediction. It involves
+estimating models for each patient then simulating from models which produce
+reliable 30-minute-ahead forecasts of `abpmean`. Currently, the combined
+super learner is predicting a binary outcome `Y1` which is derived from
+`abpmean`.
+
+# Prepare the data
+
+We wanted to ensure that there were not large gaps of time from one outcome
+measurement to the next. We only considered patients that had:
+
+* 4 hours of data and we only used these first 4 hours of data;
+* no more than 62 second gap between two sequential outcome measurements,
+  on average; and
+* no more than 3 minute gap between two sequential outcome measurements.
+
+This left us with 447 subjects.
+
+\vspace{.2in}
+
+233 of the 447 subjects experienced at least one hypotensive event, and the 
+outcome `Y1` was used to specify hypotensive events. The hypotensive patients 
+were classified as any patient that exhibited a hypotensive event. The 
+non-hypotensive never experienced a hypotensive event.
+
+\vspace{.2in}
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+load(here::here("Data", "mimic_nogap.Rdata"))
+dat <- mimic_nogap %>%
+          dplyr::group_by(subject_id) %>%
+            dplyr::mutate(init_time_and_date = min(time_and_date)) %>%
+            dplyr::mutate(min_elapsed = as.integer((time_and_date -
+                init_time_and_date) / 60) + 1) %>%
+                  dplyr::filter(min_elapsed <= 300)
+
+df_full <- dat %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::filter(min_elapsed == 300)
+
+dat <- dat[(dat$subject_id %in% df_full$subject_id),]
+df <- dat[order(dat$subject_id, dat$time_and_date),]
+
+# calculating the time difference
+df$tdiff <- unlist(tapply(df$time_and_date, INDEX = df$subject_id,
+                          FUN = function(x) c(0, diff(as.numeric(x)))))
+ddd <- df %>% dplyr::group_by(subject_id) %>% dplyr::summarise(ave = mean(tdiff))
+df_bad <- filter(ddd, ave > 62)
+df_bad2 <- filter(df, tdiff > 180)
+dat_complete <- dat[!(dat$subject_id %in% df_bad$subject_id),]
+dat_complete <- dat_complete[!(dat_complete$subject_id %in% df_bad2$subject_id),]
+# dat_complete$tdiff <- unlist(tapply(dat_complete$time_and_date, 
+#                                     INDEX = dat_complete$subject_id,
+#                           FUN = function(x) c(0, diff(as.numeric(x)))))
+# d120 <- dat_complete %>% 
+#   filter(tdiff > 120) %>%
+#   dplyr::group_by(subject_id) %>%
+#   dplyr::tally() %>%
+#   dplyr::arrange(desc(n))
+# d60 <- dat_complete %>% 
+#   filter(tdiff > 60) %>%
+#   dplyr::group_by(subject_id) %>%
+#   dplyr::tally() %>%
+#   dplyr::arrange(desc(n))
+dat_event <- dat_complete %>% filter(Y1 == 1)
+hypoids <- unique(dat_event$subject_id)
+nonhypodat <- dat_complete[!(dat_complete$subject_id %in% dat_event$subject_id),]
+nonhypoids <- unique(nonhypodat$subject_id)
+nonhypo <- dat_complete %>% filter(subject_id %in% nonhypoids)
+hypo <- dat_complete %>% filter(subject_id %in% hypoids)
+
+nonhypo$subject_id <- as.factor(nonhypo$subject_id)
+summ_nonhypo <- nonhypo %>%
+  dplyr::select(c("gender", "gender", "age", "sapsi_first", "sofa_first",
+                  "bmi", "care_unit", "admission_type_descr", "los_icu",              
+                  "los_hospital", "subject_id")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize_all(unique)
+
+summ_hypo <- dat_event %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize(hypo_event = sum(Y1))
+summ_hypo2 <- hypo %>%
+  dplyr::select(c("gender", "gender", "age", "sapsi_first", "sofa_first",
+                  "bmi", "care_unit", "admission_type_descr", "los_icu",              
+                  "los_hospital", "subject_id")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize_all(unique)
+summ_hypo <- merge(summ_hypo, summ_hypo2, by = "subject_id")
+```
+
+# Create ARIMA models for each patient
+
+An auto-regressive integrated moving average model (ARIMA) is specified by
+three order parameters: ($p, d, q$).
+
+\vspace{.2in}
+
+*$p$ is the number of autoregressive terms*
+The p is the auto-regressive (AR($p$)) component and refers to the use of past
+values in the regression equation for the series. The auto-regressive parameter
+p specifies the number of lags used in the model. Intuitively, this would be
+similar to stating that it is likely to be warm tomorrow if it has been warm the
+past $p$ days.
+
+\vspace{.1in}
+
+*$d$ is the number of nonseasonal differences*
+The $d$ represents the degree of differencing in the integrated (I($d$))
+component. Differencing a series involves subtracting its current and previous
+values $d$ times. Often, differencing is used to stabilize the series when the
+stationarity assumption is not met. Intuitively, this would be similar to
+stating that it is likely to be same temperature tomorrow if the difference in
+temperature in the last $d$ days has been very small.
+
+\vspace{.1in}
+
+*$q$ is the number of moving-averages terms*
+A moving average (MA($q$)) component represents the error of the model as a
+combination of previous error terms, where $q$ defines the number of terms to
+include in the model.
+
+\vspace{.2in}
+
+Differencing, autoregressive, and moving average components make up a
+non-seasonal ARIMA model which can be written as a linear equation:
+
+$$ Y_t = c + \phi_1y_d{_{t-1}} + \phi_p y_d{_{t-p}}+...+\theta_1 e_{t-1} +
+\theta_q e_{t-q} + e_t$$
+
+where $y_d$ is $Y$ differenced $d$ times and $c$ is a constant.
+
+\vspace{.2in}
+
+ARIMA methodology does have its limitations. These models directly rely on past
+values, and therefore work best on long and stable series. Also note that ARIMA
+simply approximates historical patterns and therefore does not aim to explain
+the structure of the underlying data mechanism.
+
+**Resources:**
+
+* [A Short Introduction to
+   ARIMA](https://www.datascience.com/blog/introduction-to-forecasting-with-arima-in-r-learn-data-science-tutorials)
+
+* [Time Series: AR, MA,
+   ARMA, ARIMA](http://people.cs.pitt.edu/~milos/courses/cs3750/lectures/class16.pdf)
+
+* [Hyndman and Athanasopoulos Forecasting:
+   Principles and Practice](https://otexts.com/fpp2/)
+
+\vspace{.2in}
+
+We use `forecast::auto.arima()` to find the best models for the hypotensive and
+non-hypotensive patients.
+
+\vspace{.2in}
+
+This function selects the optimal autoregressive and moving average orders $p$ 
+and $q$ based on a chosen information criterion (AICc by default) from a local 
+search over a few regions of values.
+
+```{r model, echo = FALSE, eval = FALSE, message = FALSE, warning = FALSE}
+run_auto_arima <- function(df, outcome = "abpmean") {
+
+  samples <- unique(df$subject_id)
+
+  # for each sample:
+  fit_list <- lapply(samples, function(x){
+
+    # subset data to only contain that sample and make sure it's in order
+    sub <- df[df$subject_id == x, ]
+    sub_ord <- sub[order(sub$time_and_date), ]
+
+    abp <- ts(as.numeric(unlist(sub_ord[,which(colnames(sub_ord)==outcome)])),
+              start = min(sub_ord$min_elapsed), end = max(sub_ord$min_elapsed))
+
+    k <- 60 # minimum data length for fitting a model
+    n <- length(abp)
+    st <- tsp(abp)[1]+(k-1)
+    increments <- seq(1, n-k-40, by = 20) # training sets increment by 20 values
+
+    model_list <- lapply(increments, function(v){
+
+      xshort <- window(abp, end = st + v)
+      xnext <- window(abp, start = st + v + 1, end = st + v + 40)
+      fit <- auto.arima(xshort, approximation = FALSE, stepwise = FALSE)
+      fcast <- forecast(fit, h = 40)
+      mape <- abs((fcast[['mean']]-xnext)/xnext)[25:35]
+      names(mape) <- seq(25, 35, 1)
+      return(list(mape = mape, fit = fit))
+
+    })
+
+    names(model_list) <- increments
+    model <- lapply(model_list, FUN = `[[`, "fit")
+    mape <- lapply(model_list, FUN = `[[`, "mape")
+    acc_df <- bind_rows(mape)
+    acc_summ <- rowMeans(acc_df)
+    name <- paste("id", x, sep = "_")
+    accuracy <- data.frame(name, t(acc_summ))
+    colnames(accuracy) <- c("subject", seq(25, 35, 1))
+    return(list(accuracy = accuracy, model = model))
+
+  })
+
+  names(fit_list) <- samples
+  models <- lapply(fit_list, FUN = `[[`, "model")
+  names(models) <- samples
+  acc <- lapply(fit_list, FUN = `[[`, "accuracy")
+  accuracy <- bind_rows(acc)
+  return(list(mape = accuracy, model = models))
+}
+
+run_auto_arima <- function(df, outcome = "abpmean") {
+
+  samples <- unique(df$subject_id)
+
+  # for each sample:
+  fit_list <- lapply(samples, function(x){
+
+    # 1. subset data to only contain that sample and make sure it's in order
+    sub <- df[df$subject_id == x, ]
+    sub_ord <- sub[order(sub$time_and_date), ]
+
+    # 2. split first 80% of data into training set, and last 20% into test set
+    split <- round(nrow(sub_ord) * .8)
+    train <- sub_ord[1:split, ]
+    train_outcome <- as.numeric(unlist(train[,which(colnames(train)==outcome)]))
+    test <- sub_ord[(split + 1):nrow(sub_ord), ]
+    test_outcome <- as.numeric(unlist(test[,which(colnames(test) == outcome)]))
+
+    # 3. fit auto ARIMA
+    fit <- auto.arima(y = train_outcome, stepwise = FALSE,
+                                approximation = FALSE)
+
+    # 4. obtain model coefficients                                          
+    fit_coef <- fit$coef
+
+    # 5. calculate residuals for subseuqent ACF and PACF plotting
+    fit_resid <- residuals(fit)
+
+    # 6. measure accuracy
+    # one-step forecast
+    model_test <- Arima(test_outcome, model = fit)
+    onestep_forecast <- fitted(model_test)
+    # accuracy of the one-step ahead out of sample forecasts
+    onestep_accuracy <- round(accuracy(model_test), 4)
+
+    plot_info <- list(onestep_forecast = onestep_forecast,
+                      test = test_outcome)
+
+    # 7. make relevant results pretty and return them
+    accuracy_onestep <- onestep_accuracy["Training set",]
+
+    return(list(fit = fit,
+                coefficients = fit_coef,
+                accuracy = accuracy_onestep,
+                plot_info = plot_info,
+                residuals = fit_resid))
+  })
+
+  # make results pretty
+  names(fit_list) <- samples
+
+  list_coef <- lapply(fit_list, function(x) data.frame(as.list(x$coefficients)))
+  list_coef <- list_coef[lapply(list_coef, length) > 0]
+  coefficients <- rbindlist(list_coef, fill = TRUE)
+  coefficients <- data.frame(subject_id = names(list_coef), coefficients)
+
+  list_acc <- lapply(fit_list, function(x) data.frame(as.list(x$accuracy)))
+  list_acc <- list_acc[lapply(list_acc, length) > 0]
+  accuracy <- rbindlist(list_acc, fill = TRUE)
+  accuracy <- data.frame(subject_id = names(list_acc), accuracy)
+
+  plot_data <- lapply(fit_list, function(x) x$plot_info)
+  names(plot_data) <- samples
+
+  residuals <- lapply(fit_list, function(x) x$residuals)
+  names(residuals) <- samples
+
+  fit <- lapply(fit_list, function(x) x$fit)
+  names(fit) <- samples
+
+  return(list(fit = fit,
+              coefficients = coefficients,
+              accuracy = accuracy,
+              plot_data = plot_data,
+              residuals = residuals))
+}
+
+set.seed(4197)
+arima_hypo <- run_auto_arima(df = hypo)
+save(arima_hypo, file = here::here("Results", "arima_hypo.Rdata"),
+     compress = TRUE)
+arima_nonhypo <- run_auto_arima(df = nonhypo)
+save(arima_nonhypo, file = here::here("Results", "arima_nonhypo.Rdata"),
+     compress = TRUE)
+```
+
+## Examine accuracy of one-step ahead forecasts
+
+For each subject considered for simulation, we split the first 80% of data into 
+a training set, and last 20% into a test set.
+
+\vspace{.2in}
+
+We assess the accuracy for the ARIMA model fits by calculating one-step aheaed 
+forecasts. These forecasts are for as many time points in the test set. This
+procedure applies the already fitted model and predicts "one-step ahead"
+forecasts by predicting the next outcome and then adds the actual outcome to the
+prediction equation for next outcome prediction. 
+
+*Note* this procedures updates the prediction equation with the new data point, 
+but does not changing the model coefficients. It is possible to do a full refit 
+of the model each time a new data point is added, and then predict with that, 
+but I do not consider that procedure in this assessment of model accuracy.
+
+\vspace{.2in}
+
+We examine the accuracy of one-step ahead forecasts with the mean absolute error 
+(MAE)  = $\text{mean}(|e_t|)$.
+
+\vspace{.2in}
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+load(here::here("Results","arima_hypo.Rdata"))
+load(here::here("Results","arima_nonhypo.Rdata"))
+```
+```{r, echo = FALSE, message = FALSE, warning = FALSE, eval = FALSE}
+acc_hypo <- arima_hypo$accuracy[,c(1,3,4)] 
+acc_hypo <- acc_hypo[order(acc_hypo$MAE),]
+acc_hypo %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "Accuracy of ARIMA one-step forecasts among hypotensive patients considered for simulation") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+
+acc_nonhypo <- arima_nonhypo$accuracy[,c(1,3,4)] 
+acc_nonhypo <- acc_nonhypo[order(acc_nonhypo$MAE),]
+acc_nonhypo %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "Accuracy of ARIMA one-step forecasts among non-hypotensive patients considered for simulation") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+```
+
+\vspace{.2in}
+
+We plot a few of these forecasts to examine the best model fits according to the 
+MAE. We also plot model fits that are just below MAE > 2, since we will consider 
+MAE > 2 as a cutoff to subset acceptable model fits from unacceptable.  
+
+\vspace{.2in}
+
+```{r, echo = FALSE, fig.align = "center", fig.width = 4, fig.height = 4, message = FALSE, warning = FALSE}
+plot_forecast <- function(type = c("hypo", "nonhypo"), id) {
+  if(type == "hypo"){
+    dat <- arima_hypo
+     t <- "hypotensive"
+  }
+  if(type == "nonhypo"){
+    dat <- arima_nonhypo
+    t <- "non-hypotensive"
+  }
+  x <- as.character(id)
+  onestep_forecast <- dat$plot_data[[x]]$onestep_forecast
+  test_outcome <- dat$plot_data[[x]]$test
+  return(ggplot() +
+           geom_line(aes(x = as.numeric(time(test_outcome)),
+                         y = as.numeric(test_outcome),
+                         col = "blue")) +
+           geom_line(aes(x = as.numeric(time(onestep_forecast)),
+                         y = as.numeric(onestep_forecast),
+                         col = "red")) +
+           scale_color_discrete(name = "",
+                                labels = c("truth", "forecast")) +
+           labs(title = paste0("One-step forecasts for ", t, " 
+                               subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") +
+           theme(legend.position="top"))
+}
+
+plot_forecast(type = "hypo", id = 20459)
+plot_forecast(type = "nonhypo", id = 26097)
+plot_forecast(type = "hypo", id = 14059)
+plot_forecast(type = "nonhypo", id = 23130)
+```
+\normalsize
+
+## Select patients for simulation based on ARIMA model performance
+
+We excluded subjects from simulation with MAE > 2. This left us with 122 
+subjects that experienced a hypotensive event and 120 that did not. 
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+hypo_good <- (arima_hypo$accuracy %>% filter(MAE <= 2))$subject_id
+hypo_good_names <- as.character(hypo_good)
+hypo_coef <- arima_hypo$coefficients[arima_hypo$coefficients$subject_id %in% 
+                                       hypo_good_names, ]
+hypo_good_names <- hypo_good_names[hypo_good_names %in% hypo_coef$subject_id]
+
+nonhypo_good <- (arima_nonhypo$accuracy %>% filter(MAE <= 2))$subject_id
+nonhypo_good_names <- as.character(nonhypo_good)
+nonhypo_coef <- arima_nonhypo$coefficients[arima_nonhypo$coefficients$subject_id 
+                                           %in% nonhypo_good_names, ]
+nonhypo_good_names <- nonhypo_good_names[nonhypo_good_names %in% 
+                                           nonhypo_coef$subject_id]
+```
+
+## Examine coefficients for ARIMA model fits included in simulation
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+hypo_coef_W <- left_join(hypo_coef, summ_hypo)
+hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar1))
+hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar2))
+hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar3))
+hypo_coef_W <- arrange(hypo_coef_W, !is.na(ar4))
+hypo_coef_W %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "ARIMA model coefficients and baseline characteristics among hypotensive patients included in simulation") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+
+nonhypo_coef_W <- left_join(nonhypo_coef, summ_nonhypo)
+nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar1))
+nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar2))
+nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar3))
+nonhypo_coef_W <- arrange(nonhypo_coef_W, !is.na(ar4))
+nonhypo_coef_W %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "ARIMA model coefficients and baseline characterstics among nonhypotensive patients included in simulation") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+```
+
+# Simulate from ARIMA models
+
+We use the ARIMA models included in the simulation to simulate 600 minute 
+time series with `forecast::simulate`. 
+
+* By default, the error series is assumed normally distributed and generated 
+  using `rnorm`. However, we set `bootstrap=TRUE`, so the residuals are 
+  resampled instead. Also, we set `future=TRUE`, so the sample paths are 
+  conditional on the data that was used to fit the model. 
+
+* When `future=FALSE` and the model is stationary, the sample paths do not 
+  depend on the data at all. When `future=FALSE` and the model is 
+  non-stationary, the location of the sample paths is arbitrary, so they all 
+  start at the value of the first observation.
+  
+Each subject considered for simulation has their own corresponding ARIMA model 
+fit. We could simulate "many-to-one" by simulating from one individuals model 
+several times to create some noise. For now, we just simulate "one-to-one". 
+That is, we create one simulated data for each ARIMA model. 
+
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+# id = Subject id to simulate from
+# type = Is the subject from the hypotensive or nonhypotensive results.
+# niter = Number of time series simulations for speicified model.
+# nsim	= Number of periods for the simulated series.
+# bootstrap = Do simulation using resampled errors rather than normally 
+#             distributed errors or errors provided as innov.
+# future = Produce sample paths that are future to and conditional on the data 
+#          in object. Otherwise simulate unconditionally.
+# seed = Either NULL or an integer that will be used in a call to set.seed 
+#        before simulating the time series.
+run_simulation <- function(id, type = c("hypo", "nonhypo"), niter = 1, 
+                           nsim = 700, seed = 4197, future = TRUE, 
+                           bootstrap = TRUE) {
+  if(type == "hypo"){
+    dat <- arima_hypo
+     t <- "hypotensive"
+     summ <- summ_hypo
+  }
+  if(type == "nonhypo"){
+    dat <- arima_nonhypo
+    t <- "non-hypotensive"
+    summ <- summ_nonhypo
+  }
+  x <- as.character(id)
+  model <- dat$fit[[x]]
+  W <- summ[summ$subject_id == x, ]
+  if(type == "hypo"){
+    W <- W[,-c(1:2)]
+  }
+  if(type == "nonhypo"){
+    W <- W[,-1]
+  }
+  W <- W[rep(seq_len(nrow(W)), each = nsim),]
+  # minroots <- min(Mod(polyroot(c(1, -model$ar))))
+  # if (minroots <= 1) {
+  #     print(paste0("'ar' part of subject ",id, " model is not stationary"))
+  # }
+  # return(tryCatch(simulate(model, nsim = nsim, bootstrap = FALSE, 
+  #                          future = FALSE, seed = 4197), 
+  #                 error = function(e) NULL))
+  if(niter == 1){
+    abpmean <- simulate(model, nsim = nsim, bootstrap = bootstrap, 
+                            future = future, seed = seed)
+    subject_id <- rep(x, nsim)
+    time <- seq(1, nsim, 1)
+    res <- data.frame(subject_id, time, W, abpmean)
+    final <- new_Y_sol1(train_all = res, cutoff = 65)
+    return(final)
+  }
+  
+  if(niter > 1){
+  sim_list <- list()
+  for(i in 1:niter){
+    abpmean <- simulate(model, nsim = nsim, bootstrap = bootstrap, 
+                        future = future, seed = seed)
+    subject_id <- paste(x, i, sep = "_")
+    time <- seq(1, nsim, 1)
+    res <- data.frame(subject_id, time, W, abpmean)
+    final <- new_Y_sol1(train_all = res, cutoff = 65)
+    sim_list[[i]] <- final
+  }
+  return(rbindlist(sim_list))
+  }
+}
+
+hypo_sim_list <- lapply(hypo_good_names, run_simulation, type = "hypo")
+hypo_sim <- rbindlist(hypo_sim_list)
+hypo_sim$abpmean <- as.numeric(hypo_sim$abpmean)
+save(hypo_sim, file = here::here("Results", "hypo_sim.Rdata"), compress = TRUE)
+
+nonhypo_sim_list <- lapply(nonhypo_good_names, run_simulation, type = "nonhypo")
+nonhypo_sim <- rbindlist(nonhypo_sim_list)
+nonhypo_sim$abpmean <- as.numeric(nonhypo_sim$abpmean)
+save(nonhypo_sim, file = here::here("Results", "nonhypo_sim.Rdata"), 
+     compress = TRUE)
+
+both_sim <- rbind(nonhypo_sim, hypo_sim)
+both_sim <- both_sim[,-7]
+save(both_sim, file = here::here("Results", "both_sim.Rdata"), compress = TRUE)
+```
+
+# 5. Fit combined super learner
+
+We fit the combined (global and individual) super learner across a range
+of training data lengths. Also, we fit the combined 
+super learner to simulated data from
+
+1. patients that experienced a hypotensive event, 
+2. patients that did not experience a hypotensive event, and 
+3. all patients included in the simulation. 
+
+Due to time constraints we only fit the combined super learner to simulated data 
+from 3.
+
+\vspace{.2in}
+
+We train the global super learner with baseline covariates, and with and without 
+correlation-based screening of baseline covariates. We include the following 
+baseline covariates:
+
+* gender
+* age
+* care_unit
+* sapsi_first
+* sofa_first
+* admission_type_descr
+
+The combined online super learner also uses the individual super learner, which 
+learns only from one sample at a time. For the individual super learner, we 
+incorporate the following:
+
+* baseline covariates mentioned above
+* rolling origin cross-validation for the time series with
+  * initial training set size 10 minutes
+  * test set size 10 minutes
+  * increase training set size by increments of 5 minutes
+
+For the combined super learner, we incorporate a gap of 30 minutes between the 
+last trained time point and the first prediction time point. 
+
+For the base learning library, we consider 8 variations of xgboost. 
+
+\vspace{.2in}
+
+*Note* that the global super learner does incorporate the subject id when 
+creating the fold structure, but does not incorporate the rolling origin 
+cross-validation procedure because that functionality has not been developed 
+quite yet. 
+
+\vspace{.2in}
+
+**How should the combined super perform given the simulated data?** 
+
+Since an individual model was fit to each subject, we would imagine that the 
+individual super learner would consistently outperform the global super learner. 
+However, we did incorporate the baseline covariates in the combined super 
+learner, so the global super learner could still perform OK if it picks up 
+signals across samples that can be explained by the baseline covariates. 
+Alternatively, if we fit one ARIMA model to all subjects, then we would expect 
+the global super learner to outperform the individual. 
+
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+load(here::here("Results", "both_sim.Rdata"))
+load(here::here("Results", "hypo_sim.Rdata"))
+load(here::here("Results", "nonhypo_sim.Rdata"))
+source(here::here("R", "CombinedOnlineSL_sim.R"))
+
+cov <- c("gender", "age", "care_unit", "sapsi_first", "sofa_first", 
+         "admission_type_descr")
+
+grid_params = list(max_depth = c(3, 6),
+                   eta = c(0.01, 0.1),
+                   nrounds = c(20, 100),
+                   subsample = c(0.5, 1))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+  })
+
+stack_xgb <- make_learner(
+  Stack, xgb_learners[[1]], xgb_learners[[2]], xgb_learners[[3]],
+  xgb_learners[[4]], xgb_learners[[5]], xgb_learners[[6]],
+  xgb_learners[[7]], xgb_learners[[8]], xgb_learners[[9]], 
+  xgb_learners[[10]], xgb_learners[[11]], xgb_learners[[12]], 
+  xgb_learners[[13]], xgb_learners[[14]], xgb_learners[[15]], 
+  xgb_learners[[16]])
+
+screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
+cor_pipeline <- make_learner(Pipeline, screen_cor, stack_xgb)
+stack_screen_xgb <- make_learner(Stack, cor_pipeline, stack_xgb)
+
+metalearner <- make_learner(Lrnr_nnls)
+sl_xgb <- Lrnr_sl$new(learners = stack_xgb, metalearner = metalearner)
+
+times <- seq(60, 600, by = 30)
+run_comSLsim <- function(type_dat = c("hypo", "nonhypo", "both"), 
+                         type_outcome = c("bin", "cont"), sl = sl_xgb, 
+                         stack = stack_xgb, stack_screen = stack_screen_xgb,
+                         covars_wbaseline = cov) {
+  if(type_dat == "hypo"){dat <- data.table(hypo_sim)}
+  if(type_dat == "nonhypo"){dat <- data.table(nonhypo_sim)}
+  if(type_dat == "both"){dat <- data.table(both_sim)}
+  if(type_outcome == "bin"){out <- "Y1"}
+  if(type_outcome == "cont"){out <- "abpmean"}
+  comSLsim_res <- lapply(times, function(x){
+    tryCatch(combine_SL_sim(t = x, train_all = dat, covars_wbaseline = cov, 
+                       outcome = out, sl = sl, stack = stack, 
+                       stack_screen = stack_screen), error = function(e) NULL)
+        #options(error=recover)
+  })
+  names(comSLsim_res) <- lapply(times, paste, "min", sep = "")
+  return(comSLsim_res)
+}
+run_comSLsim <- function(type_dat = c("hypo", "nonhypo", "both"), 
+                         type_outcome = c("bin", "cont"), sl = sl_xgb, 
+                         stack = stack_xgb, stack_screen = stack_screen_xgb,
+                         covars_wbaseline = cov) {
+  if(type_dat == "hypo"){dat <- data.table(hypo_sim)}
+  if(type_dat == "nonhypo"){dat <- data.table(nonhypo_sim)}
+  if(type_dat == "both"){dat <- data.table(both_sim)}
+  if(type_outcome == "bin"){out <- "Y1"}
+  if(type_outcome == "cont"){out <- "abpmean"}
+  comSLsim_res <- lapply(times, function(x){
+    combine_SL_sim(t = x, train_all = dat, covars_wbaseline = cov, 
+                   outcome = out, sl = sl, stack = stack, 
+                   stack_screen = stack_screen)
+  })
+  names(comSLsim_res) <- lapply(times, paste, "min", sep = "")
+  return(comSLsim_res)
+}
+
+
+# patients that did experience a hypotensive event
+ptm <- proc.time()
+comSLsim_hypo_bin <- run_comSLsim(type_dat = "hypo", type_outcome = "bin")
+save(comSLsim_hypo_bin, file = here::here("Results", "comSLsim_hypo_bin.Rdata"))
+proc.time() - ptm
+     user    system   elapsed
+11473.536    36.105 11083.496
+
+ptm <- proc.time()
+comSLsim_hypo_cont <- run_comSLsim(type_dat = "hypo", type_outcome = "cont")
+save(comSLsim_hypo_cont, file = here::here("Results", "comSLsim_hypo_cont.Rdata"))
+proc.time() - ptm
+
+# patients that did not experience a hypotensive event
+comSLsim_nonhypo_bin <- run_comSLsim(type_dat = "nonhypo", type_outcome = "bin")
+save(comSLsim_nonhypo_bin, file = here::here("Results", "comSLsim_nonhypo_bin.Rdata"))
+comSLsim_nonhypo_cont <- run_comSLsim(type_dat = "nonhypo", type_outcome = "cont")
+save(comSLsim_nonhypo_cont, file = here::here("Results", "comSLsim_nonhypo_cont.Rdata"))
+
+# all patients included in the simulation
+comSLsim_both_bin <- run_comSLsim(type_dat = "both", type_outcome = "bin")
+save(comSLsim_both_bin, file = here::here("Results", "comSLsim_both_bin.Rdata"))
+comSLsim_both_cont <- run_comSLsim(type_dat = "both", type_outcome = "cont")
+save(comSLsim_both_cont, file = here::here("Results", "comSLsim_both_cont.Rdata"))
+```
+
+# 6. Calculate performance metrics of combined super learner
+
+We evaluate the performance of the combined super learner for each sample 
+individually, so learner weights are individualized. The global super learner 
+will be the same for all samples, but the individual super learner will vary 
+across samples. 
+
+\vspace{.2in}
+
+The function that allocates weights to the base learners assigns a coefficient 
+based on all of the predictions, and thus does not consider the time-specific 
+nature to the predictions. 
+
+\vspace{.2in}
+
+The loss of the combined super learner is a sum over all of the samples, 
+evaluated only over the validation time points, a 30 minute horizon. 
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+load(here::here("Results", "comSLsim_hypo_bin.Rdata"))
+load(here::here("Results", "comSLsim_hypo_cont.Rdata"))
+load(here::here("Results", "comSLsim_nonhypo_bin.Rdata"))
+load(here::here("Results", "comSLsim_nonhypo_cont.Rdata"))
+load(here::here("Results", "comSLsim_both_bin.Rdata"))
+load(here::here("Results", "comSLsim_both_cont.Rdata"))
+
+run_calcs <- function(res_bin, res_cont){
+  calc_all_bin <- lapply(res_bin, calculations_bin_sim)
+  calc_all_cont <- lapply(res_cont, calculations_cont_sim, res_bin)
+  names(calc_all_bin) <- lapply(times, paste, "min", sep = "")
+  names(calc_all_cont) <- lapply(times, paste, "min", sep = "")
+  return(list(calc_all_bin = calc_all_bin, calc_all_cont = calc_all_cont))
+}
+
+calcs_hypo <- run_calcs(res_bin = comSLsim_hypo_bin, 
+                        res_cont = comSLsim_hypo_cont)
+calcs_nonhypo <- run_calcs(res_bin = comSLsim_nonhypo_bin, 
+                           res_cont = comSLsim_nonhypo_cont)
+calcs_both <- run_calcs(res_bin = comSLsim_both_bin, 
+                        res_cont = comSLsim_both_cont)
+
+run_loss <- function(calcs){ 
+  loss <- t(cbind.data.frame(lapply(calcs, function(x) x$loss)))
+  row.names(loss) <- lapply(times/60, paste, "hours training time")
+  data.frame(loss)
+}
+
+run_loss(calcs_hypo$calc_all_bin) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Binary Outcome - Hypotensive Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+run_loss(calcs_hypo$calc_all_cont) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Continuous Outcome - Hypotensive Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+
+run_loss(calcs_nonhypo$calc_all_bin) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Binary Outcome - Nonhypotensive Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+run_loss(calcs_nonhypo$calc_all_cont) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Continuous Outcome - Nonhypotensive Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+
+run_loss(calcs_both$calc_all_bin) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Binary Outcome - All Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+run_loss(calcs_both$calc_all_cont) %>%
+  kable(format = "latex", digits = 4,
+        caption = "Combined SL Risks - Continuous Outcome - All Simulated Patients") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7, position = "center")
+```
+
+```{r, echo = FALSE, eval = TRUE, message = FALSE, warning = FALSE, fig.align = "center"}
+weight_all_ave<-t(cbind.data.frame(calc_both_t100$ave_SL_type[2],
+                                   calc_both_t300$ave_SL_type[2],
+                                   calc_both_t500$ave_SL_type[2]))
+row.names(weight_all_ave) <- c("100", "300", "500")
+colnames(weight_all_ave) <- t(calc_both_t100$ave_SL_type[1])
+weight_all_ave <- cbind.data.frame(Time = row.names(weight_all_ave),
+                                   weight_all_ave)
+weight_all_ave <- melt(weight_all_ave, id = "Time")
+weight_all_ave$Time <- as.numeric(levels(weight_all_ave$Time))[weight_all_ave$Time]
+
+ggplot(weight_all_ave, aes(x = Time, y = value, colour = variable)) + 
+  geom_line(aes(group = variable), size = 0.4) + 
+  geom_point(shape = 1) + 
+  ggtitle("SL weights over varying training time among all simulated subjects") + 
+  labs(x = "Training time (minutes)", y = "Super learner coefficient", sep = " ") 
+
+```
+
+```{r, echo=FALSE}
+plot_auc <- function(calcs_bin, calcs_cont, type) {
+  
+  bin_truth <- lapply(calcs_bin, function(x) x$truth$truth)
+  names(bin_truth) <- lapply(times/60, paste, "Hours Training Time")
+  bin_pred <- lapply(calcs_bin, function(x) x$pred_fin$pred)
+  cont_truth <- lapply(calcs_cont, function(x) x$truth$truth)
+  cont_pred <- lapply(calcs_cont, function(x) x$pred_fin$pred)
+  
+  for(i in 1:length(bin_truth)) {
+    name <- names(bin_truth)[[i]]
+    par(pty="s")
+    print(roc(bin_truth[[i]], bin_pred[[i]], plot = TRUE, col = "#377eb8", 
+              lwd = 4, print.auc = TRUE, 
+              main = paste0("Combined SL - ", type, " - " , name))
+          pROC::plot.roc(cont_truth[[i]], cont_pred[[i]], col = "#4daf4a", 
+                         lwd = 4, print.auc = TRUE, add = TRUE, 
+                         print.auc.y = 0.3)
+          legend("bottomright", col = c("#377eb8", "#4daf4a"), lwd = 4, 
+                 legend = c("Binary Outcome", "Continuous Outcome")))
+  }
+}
+
+plot_auc(calcs_bin = calcs_hypo$calc_all_bin, 
+         calcs_cont = calcs_hypo$calc_all_cont,
+         type = "Hypotensive Simulated Patients")
+
+plot_auc(calcs_bin = calcs_nonhypo$calc_all_bin, 
+         calcs_cont = calcs_nonhypo$calc_all_cont,
+         type = "Nonhypotensive Simulated Patients")
+
+plot_auc(calcs_bin = calcs_both$calc_all_bin, 
+         calcs_cont = calcs_both$calc_all_cont,
+         type = "All Simulated Patients")
+```
+
+
+```{r, echo=FALSE, eval=TRUE}
+weight_all_ave<-t(cbind.data.frame(lapply(calc_all_bin, function(x) x$ave_SL_type[2])))
+
+row.names(weight_all_ave)<- as.character(times)
+colnames(weight_all_ave)<-t(calc_all_bin[[1]]$ave_SL_type[1])
+weight_all_ave<-cbind.data.frame(Time=row.names(weight_all_ave),weight_all_ave)
+weight_all_ave<-melt(weight_all_ave, id="Time")
+weight_all_ave$Time<-as.numeric(levels(weight_all_ave$Time))[weight_all_ave$Time]
+
+ggplot(weight_all_ave, aes(x=Time,y=value,colour=variable)) + geom_line(aes(group=variable),size=0.4) + geom_point(shape=1) + ggtitle("Super Learner Weights over varying Training Time") + labs(x="Training time (minutes)", y="Super Learner Coefficient", sep=" ") + theme_bw()
+
+```
+
+# 7. Next steps
+
+* Create simulations where global super learner should outperform individual.
+* Add rolling origin cross-validation to global super learner, while still 
+  pooling subjects. 
+* Incorporate continuous super learner to the individual super learner.
+
+<!---
+
+pick just you 
+
+mean (1 auto arima for all)
+
+mean + noise (1 auto arima for all, multiple for 1)
+
+predict on future, masking data from super learner
+
+randomly draw individuals taking covariates with them
+
+create new fxns for each individual examining how the treatment interacts with
+the past.
+
+uses the residuals to predict in the future
+
+simulate the outcome and then add normal error
+
+take residuals for each person with 200 time points,
+you have these repeated measures and you want to get the vcov of that matrix
+estimate rho and do it that way
+
+simulate them in a way that they're correlated in a reasonable way.
+
+generate a sequence with the same sampling distribution of the original data.
+
+
+develop whole simulation structure so you can do anything you want in the future
+how are measrures erformance derived w previous fns
+
+if the individual covariates explain the difference between model fits,
+baseline disease
+
+if overfit then covariates won't be predictive
+--->
