@@ -1,5 +1,5 @@
 Data/*.Rdata
-Results/combinedsl_sim*.Rdata
+Results/*.Rdata
 Data/*.RData
 Results/arima_*.RData
 .Rproj.user
