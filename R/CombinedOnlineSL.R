@@ -31,26 +31,17 @@ eval_loss_cont <- function(ps, y){
 #####################
 ### Global learner
 #####################
-global_SL = function(t){
+global_SL = function(train_all, t, outcome, sl, stack, stack_screen, covars, covars_wbaseline){
   
   #Pool across time (fitting on all data up to time t)
-  #Here, we imposse a Markov order assumption (independence between times)
+  #Here, we impose a Markov order assumption
   
   ##This treats time points and samples as independent. 
   #Since here we are pulling across time, this should be ok
   
   test_data <- train_all[train_all$time<=t,]
   
-  #TO DO: Find a smart way to pull across time and samples, and have
-  #validation be samples in the next time for all samples.
-  
-  #folds <- origami::make_folds(test_data,
-  #                             fold_fun = folds_rolling_window,
-  #                             window_size = training_size,
-  #                             validation_size = test_size, gap = 0,
-  #                             batch = mini_batch)
-  
-  # create the sl3 task with 
+  # create the sl3 task with time-varying covariates
   task <- make_sl3_Task(
     data = test_data, covariates = covars,
     outcome = outcome) #,folds=folds)
@@ -67,9 +58,14 @@ global_SL = function(t){
   globalSL<-stack$train(task)
   globalSL_baseline<-stack$train(task_baseline)
   
-  #Fit the global learner with screeners:
-  globalSL_screen<-stack_screen$train(task)
-  globalSL_screen_baseline<-stack_screen$train(task_baseline)
+  if(!is.null(stack_screen)){
+    #Fit the global learner with screeners:
+    globalSL_screen<-stack_screen$train(task)
+    globalSL_screen_baseline<-stack_screen$train(task_baseline)
+  }else{
+    globalSL_screen<-NULL
+    globalSL_screen_baseline<-NULL
+  }
   
   return(list(t=t,
               regularSL=regularSL,
@@ -82,7 +78,8 @@ global_SL = function(t){
 #######################
 ### Individual learner
 #######################
-individual_SL = function(t,id,first_window,test_size,mini_batch){
+individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
+                         covars_wbaseline,stack){
   
   #Subset to sample with subject id id
   train_one <- train_all[train_all$subject_id %in% id,]
@@ -128,27 +125,52 @@ individual_SL = function(t,id,first_window,test_size,mini_batch){
 #Loss generated is a sum over all the samples, evaluated only over validation time points.
 
 ### For each t, derive weights at horizon h
+#train_all: the full dataset used
 #t: time until which we train the SuperLearners
+#outcome: name of the outcome column.
+#stack: sl3 stack object. The learners in it should not use screeners.
+#sl: sl3 SuperLearner object.
+#stack_screen: sl3 stack object. The learners in it should use screeners.
+#covars: Time varying covariates
+#covars_baseline: Baseline covariates
 #gap: time between the last trained time point and the first prediction time point
 #h: length of horizon at which we evaluate the loss
-#train_all: the full dataset used
 #first_window: size of the training set (for example, 1 to first window).
 #test_size: size of the validation set (in time points).
 #mini_batch: by how many time points to increase the training set after the first iteration?
-#outcome: name of the outcome column.
 
-combine_SL = function(t,gap,h,train_all,
-                      first_window, test_size,mini_batch,outcome){
 
-  #Get all the individual samples:
-  samples <- unique(train_all$subject_id)
+combine_SL = function(train_all, outcome,t, 
+                      stack, sl, stack_screen=NULL, 
+                      covars, covars_baseline,
+                      gap=0,h=1,
+                      first_window=1,test_size=1, mini_batch=1,
+                      id=NULL){
+  
+  #Combine time-varying and baseline covariates
+  covars_wbaseline <- c(covars, covars_baseline)
+  
+  #Allows for a single id combined SL
+  if(is.null(id)){
+    #Get all the individual samples:
+    samples <- unique(train_all$subject_id)
+  }else{
+    #If id provided, then just the id:
+    samples <- id
+  }
   
   #Train the Global SLs:
-  global_SL_t<-global_SL(t=t)
+  global_SL_t<-global_SL(train_all=train_all, t=t, outcome=outcome, 
+                         sl=sl, stack=stack, stack_screen=stack_screen,
+                         covars=covars, covars_wbaseline=covars_wbaseline)
   
   #Create individual SLs for all samples:
-  individual_SL_t <- lapply(samples, function(x){individual_SL(t=t,id=x,
-                                                               first_window,test_size,mini_batch)})
+  individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x,
+                                                               first_window=first_window,
+                                                               test_size=test_size,
+                                                               mini_batch=mini_batch,
+                                                               covars_wbaseline=covars_wbaseline,
+                                                               stack=stack)})
   
   # create the sl3 task:
   tasks <- lapply(samples, function(x){train_one <- train_all[train_all$subject_id %in% x,]
@@ -160,7 +182,8 @@ combine_SL = function(t,gap,h,train_all,
   make_sl3_Task(data = train_one[(t+1+gap):(t+gap+h),], covariates = covars_wbaseline, outcome = outcome)
   })
   
-  lrn<-length(global_SL_t$globalSL$print())
+  lrn<-length(global_SL_t$globalSL$.__enclos_env__$private$.learner_names)
+  learner_names<-global_SL_t$globalSL$.__enclos_env__$private$.learner_names
   
   ### Get all predictions:
   
@@ -173,15 +196,20 @@ combine_SL = function(t,gap,h,train_all,
   pred_global_SL_baseline <- lapply(tasks_baseline, function(task){matrix(unlist(lapply(1:lrn, function(x){
     global_SL_t$globalSL_baseline$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
   #Global SL with screeners:
-  pred_global_SL_screen <- lapply(tasks, function(task){
-    p<-global_SL_t$globalSL_screen$fit_object$learner_fits[[1]]$predict(task)
-    as.matrix(p)
-  })
-  #Global SL with screeners and baseline covariates:
-  pred_global_SL_screen_baseline <- lapply(tasks_baseline, function(task){
-    p<-global_SL_t$globalSL_screen_baseline$fit_object$learner_fits[[1]]$predict(task)
-    as.matrix(p)
-  })
+  if(!is.null(stack_screen)){
+    pred_global_SL_screen <- lapply(tasks, function(task){
+      p<-global_SL_t$globalSL_screen$fit_object$learner_fits[[1]]$predict(task)
+      as.matrix(p)
+    })
+    #Global SL with screeners and baseline covariates:
+    pred_global_SL_screen_baseline <- lapply(tasks_baseline, function(task){
+      p<-global_SL_t$globalSL_screen_baseline$fit_object$learner_fits[[1]]$predict(task)
+      as.matrix(p)
+    })
+  }else{
+    pred_global_SL_screen<-NULL
+    pred_global_SL_screen_baseline<-NULL
+  }
   #Individual SL:
   pred_individual_SL<-lapply(seq_along(tasks), function(i){
     matrix(unlist(lapply(1:lrn, function(x){
@@ -191,22 +219,35 @@ combine_SL = function(t,gap,h,train_all,
   #pred_regular_individual_SL<-lapply(seq_along(tasks), function(i){
   #  individual_SL_t[[i]]$indregularSL$predict(tasks_baseline[[i]])})
   
-  #TO DO: allow for different learners for global and individual SLs
-  learners<-c(paste("GlobalSL", global_SL_t$globalSL$print(), sep="_"),
-              paste("GlobalSL_baseline", global_SL_t$globalSL$print(), sep="_"),
-              paste("GlobalSL_screen", global_SL_t$globalSL$print(), sep="_"),
-              paste("GlobalSL_screenbaseline_", global_SL_t$globalSL$print(), sep="_"),
-              paste("IndividualSL", global_SL_t$globalSL$print(), sep="_")) 
-  
-  #For sample i, get predictions:
-  preds <- lapply(seq_along(tasks), function(i){
-    ps<-cbind.data.frame(pred_global_SL[[i]],
-                         pred_global_SL_baseline[[i]],
-                         pred_global_SL_screen[[i]],
-                         pred_global_SL_screen_baseline[[i]],
-                         pred_individual_SL[[i]])
-    names(ps)<-learners
-    t(ps)})
+  if(!is.null(stack_screen)){
+    learners<-c(paste("GlobalSL", learner_names, sep="_"),
+                paste("GlobalSL_baseline", learner_names, sep="_"),
+                paste("GlobalSL_screen", learner_names, sep="_"),
+                paste("GlobalSL_screenbaseline_", learner_names, sep="_"),
+                paste("IndividualSL", learner_names, sep="_")) 
+    
+    #For sample i, get predictions:
+    preds <- lapply(seq_along(tasks), function(i){
+      ps<-cbind.data.frame(pred_global_SL[[i]],
+                           pred_global_SL_baseline[[i]],
+                           pred_global_SL_screen[[i]],
+                           pred_global_SL_screen_baseline[[i]],
+                           pred_individual_SL[[i]])
+      names(ps)<-learners
+      t(ps)})
+  }else{
+    learners<-c(paste("GlobalSL", learner_names, sep="_"),
+                paste("GlobalSL_baseline", learner_names, sep="_"),
+                paste("IndividualSL", learner_names, sep="_")) 
+    
+    #For sample i, get predictions:
+    preds <- lapply(seq_along(tasks), function(i){
+      ps<-cbind.data.frame(pred_global_SL[[i]],
+                           pred_global_SL_baseline[[i]],
+                           pred_individual_SL[[i]])
+      names(ps)<-learners
+      t(ps)})
+  }
   
   #Get the truth:
   truths <- lapply(samples, function(x){
@@ -215,7 +256,7 @@ combine_SL = function(t,gap,h,train_all,
   })
   
   #Evaluate the loss for discrete learners, for each sample:
-  if(dim(unique(train_all[,outcome]))[1]>2){
+  if(length(unique(train_all[,outcome]))>2){
     #Continuous outcome
     loss <- lapply(seq_along(tasks), function(i){eval_loss_cont(preds[[i]],truths[[i]])})
   }else{
@@ -251,14 +292,14 @@ combine_SL = function(t,gap,h,train_all,
     #  fit_coef<-fit_coef/sum(fit_coef)
     #}else if(sum(fit_coef)==0){
     #  warning("All algorithms have zero weight", call. = FALSE)
-      #Give all weight to the discrete learner:
-      #fit_coef[which.min(l)]<-1
+    #Give all weight to the discrete learner:
+    #fit_coef[which.min(l)]<-1
     ##NOTE: SuperLearner does not do this!  
     #Might cause issue with regular SL comparison?
     #}else if(sum(fit_coef)<1 && sum(fit_coef)!=0){
-      #Give all weight to the discrete learner:
-      #fit_coef<-rep(0,length(l))
-      #fit_coef[which.min(l)]<-1 
+    #Give all weight to the discrete learner:
+    #fit_coef<-rep(0,length(l))
+    #fit_coef[which.min(l)]<-1 
     #  fit_coef<-fit_coef
     #}
     
@@ -284,7 +325,7 @@ combine_SL = function(t,gap,h,train_all,
   #Evaluate loss over final SuperLearners!
   #Note that this is the loss over validation samples
   #Evaluate the loss for discrete learners, for each sample:
-  if(dim(unique(train_all[,outcome]))[1]>2){
+  if(length(unique(train_all[,outcome]))>2){
     #Continuous outcome
     loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(preds_fin[[i]]),truths[[i]])}))
     loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_regular_SL[[i]]),truths[[i]])}))
@@ -299,7 +340,7 @@ combine_SL = function(t,gap,h,train_all,
   losses_all<-cbind.data.frame(loss_online_SL=loss_online_SL,
                                loss_regular_SL=loss_regular_SL)
   #loss_individual_SL=loss_individual_SL
-
+  
   return(list(#Final, weighted prediction.
     preds_fin=preds_fin, 
     #Final, weighted prediction for the regular SL
