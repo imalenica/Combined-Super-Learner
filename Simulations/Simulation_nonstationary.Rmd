@@ -642,7 +642,7 @@ covars <- c("amine","sedation","ventilation","time")
 # Set the SL libraries:
 #######################################
 
-grid_params = list(max_depth=c(3,6),
+grid_params = list(max_depth=c(4,8),
                    eta = c(0.001, 0.01, 0.1, 0.2))
 grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
 params_default = list(nthread = getOption("sl.cores.learners", 1))
@@ -668,16 +668,39 @@ sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
 # Run the Combined Super Learner
 ######################################
 
-times <- seq(30, 330, by = 30)
+#TO DO: Note that folds_rolling_window would actually be a much more suited CV for nonstationary ts.
+times <-as.list(seq(30, 300, by = 30))
 
 comSLsim_res <- lapply(times, function(x){
   #Ignore the fact we technically have an interrupted ts
   combine_SL(t = x, train_all = train_all, outcome=outcome, 
-             stack_pool=stack, sl=sl, stack_individual=stack, stack_screen = stack_screen,
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
              covars=covars, covars_baseline = covars_baseline,
-             gap=0, h=30,
-             first_window=10,test_size=10,mini_batch=5,
+             gap=0, h=30, first_window=10, test_size=10, mini_batch=5,
              id=id)
 })
 
+save(comSLsim_res, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results", id, ".Rdata")), compress = TRUE)
 ```
+
+```{r, echo=FALSE, eval=TRUE}
+load(here::here("Results/Nonstationary_ts", "CombineSL_results20403.Rdata"))
+times <-as.list(seq(30, 300, by = 30))
+
+#############################################
+# Assess the performance at each time step
+#############################################
+
+#Grab algorithm with smallest loss:
+comSLsim_loss <- lapply(seq(comSLsim_res), function(i){
+  names(which.min(comSLsim_res[[i]]$loss[[1]]))
+})
+comSLsim_loss <- cbind.data.frame(time=unlist(times), learner=unlist(comSLsim_loss))
+
+comSLsim_loss %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "Picked learner at varying training size") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+```
+
