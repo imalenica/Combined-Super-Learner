@@ -31,7 +31,10 @@ eval_loss_cont <- function(ps, y){
 #####################
 ### Global learner
 #####################
-global_SL = function(train_all, t, outcome, sl, stack, stack_screen, covars, covars_wbaseline){
+global_SL = function(train_all, t, outcome, 
+                     sl, stack_pool, stack_screen, 
+                     covars, covars_wbaseline,
+                     test_size, first_window, mini_batch){
   
   #Pool across time (fitting on all data up to time t)
   #Here, we impose a Markov order assumption
@@ -59,12 +62,14 @@ global_SL = function(train_all, t, outcome, sl, stack, stack_screen, covars, cov
     data = test_data, covariates = covars_wbaseline,
     outcome = outcome, folds=folds)
   
+  #### PROBLEM: Regular sl has an issue with these folds
   #Fit the regular Super Learner (with baseline covariates)
-  regularSL <- sl$train(task_baseline)
+  #regularSL <- sl$train(task_baseline)
+  regularSL <- NULL
   
   #Fit the global learner:
-  globalSL<-stack$train(task)
-  globalSL_baseline<-stack$train(task_baseline)
+  globalSL<-stack_pool$train(task)
+  globalSL_baseline<-stack_pool$train(task_baseline)
   
   if(!is.null(stack_screen)){
     #Fit the global learner with screeners:
@@ -87,7 +92,7 @@ global_SL = function(train_all, t, outcome, sl, stack, stack_screen, covars, cov
 ### Individual learner
 #######################
 individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
-                         covars_wbaseline,stack){
+                         covars_wbaseline,stack_individual){
   
   #Subset to sample with subject id id
   train_one <- train_all[train_all$subject_id %in% id,]
@@ -112,7 +117,7 @@ individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
   indregularSL<-NULL
   
   #Fit the global learner:
-  individualSL<-stack$train(task)
+  individualSL<-stack_individual$train(task)
   
   return(list(t=t, 
               indregularSL=indregularSL,
@@ -148,11 +153,10 @@ individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
 #test_size: size of the validation set (in time points).
 #mini_batch: by how many time points to increase the training set after the first iteration?
 
-combine_SL = function(train_all, outcome,t, 
-                      stack_pool, stack_individual, sl, stack_screen=NULL, 
+combine_SL = function(train_all, outcome, t, 
+                      stack_pool, stack_individual, stack_screen=NULL, sl,
                       covars, covars_baseline,
-                      gap=0,h=1,
-                      first_window=1,test_size=1, mini_batch=1,
+                      gap=0,h=1, first_window=1,test_size=1, mini_batch=1,
                       id=NULL){
   
   #Combine time-varying and baseline covariates
@@ -169,8 +173,10 @@ combine_SL = function(train_all, outcome,t,
   
   #Train the Global SLs:
   global_SL_t<-global_SL(train_all=train_all, t=t, outcome=outcome, 
-                         sl=sl, stack=stack, stack_screen=stack_screen,
-                         covars=covars, covars_wbaseline=covars_wbaseline)
+                         sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
+                         covars=covars, covars_wbaseline=covars_wbaseline,
+                         test_size=test_size, first_window=first_window, 
+                         mini_batch=mini_batch)
   
   #Create individual SLs for all samples:
   individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x,
@@ -178,7 +184,7 @@ combine_SL = function(train_all, outcome,t,
                                                                test_size=test_size,
                                                                mini_batch=mini_batch,
                                                                covars_wbaseline=covars_wbaseline,
-                                                               stack=stack_individual)})
+                                                               stack_individual=stack_individual)})
   
   # create the sl3 task:
   tasks <- lapply(samples, function(x){train_one <- train_all[train_all$subject_id %in% x,]
@@ -196,8 +202,8 @@ combine_SL = function(train_all, outcome,t,
 
   ### Get all predictions:
   
-  #Regular SL:
-  pred_regular_SL <- lapply(tasks_baseline, function(task){global_SL_t$regularSL$predict(task)})
+  #Regular SL: (using sl3 directly)
+  #pred_regular_SL <- lapply(tasks_baseline, function(task){global_SL_t$regularSL$predict(task)})
   #Global SL:
   pred_global_SL <- lapply(tasks, function(task){matrix(unlist(lapply(1:lrn, function(x){
     global_SL_t$globalSL$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
@@ -224,7 +230,7 @@ combine_SL = function(train_all, outcome,t,
     matrix(unlist(lapply(1:lrn, function(x){
       individual_SL_t[[i]]$individualSL$fit_object$learner_fits[[x]]$predict(tasks_baseline[[i]])})),nrow=h,ncol=lrn)
   })
-  #Regular Individual SL:
+  #Regular Individual SL: (using sl3 directly)
   #pred_regular_individual_SL<-lapply(seq_along(tasks), function(i){
   #  individual_SL_t[[i]]$indregularSL$predict(tasks_baseline[[i]])})
   
@@ -264,7 +270,7 @@ combine_SL = function(train_all, outcome,t,
     train_one[(t+1+gap):(t+gap+h), outcome]
   })
   
-  #Evaluate the loss for discrete learners, for each sample:
+  ### Evaluate the loss for discrete learners, for each sample:
   if(length(unique(train_all[,outcome]))>2){
     #Continuous outcome
     loss <- lapply(seq_along(tasks), function(i){eval_loss_cont(preds[[i]],truths[[i]])})
@@ -315,10 +321,21 @@ combine_SL = function(train_all, outcome,t,
     return(fit_coef)
   }
   
-  #Get weights for each sample:
+  #### Get weights for each sample
+  #Get weights with combined SuperLearner
   weights <- lapply(seq_along(tasks), function(i){
     get_weights(preds[[i]],truths[[i]],loss[[i]])
   })
+  #Get weights for just the regular SuperLearner
+  weights_reg_sl <- lapply(seq_along(tasks), function(i){
+    get_weights(t(pred_global_SL_baseline[[i]]),truths[[i]], l=0)
+  })
+  #Get weights for just the individual SuperLearner
+  weights_ind_sl <- lapply(seq_along(tasks), function(i){
+    get_weights(t(pred_individual_SL[[i]]),truths[[i]], l=0)
+  })
+  
+  #### Get the ensemble predictions
   #Get the prediction with weighted combination of learners:
   preds_fin <- lapply(seq_along(tasks), function(i){
     #Generates weighted prediction for each validation time-point
@@ -326,36 +343,50 @@ combine_SL = function(train_all, outcome,t,
     names(pred) <- paste0("Sample",samples[i])
     pred
   })
-  #Connect weights and learners:
-  fit_coef <- lapply(seq_along(tasks), function(i){
-    data.frame(learners=learners,coefs=weights[[i]])
+  #Get the regular SL prediction
+  pred_regular_SL <- lapply(seq_along(tasks), function(i){
+    #Generates weighted prediction for each validation time-point (regular SL)
+    pred <- data.frame(pred = as.matrix((pred_global_SL_baseline[[i]])) %*% weights_reg_sl[[i]])
+    names(pred) <- paste0("Sample",samples[i])
+    pred
+  })
+  #Get the individual SL prediction
+  pred_individual_SL <- lapply(seq_along(tasks), function(i){
+    #Generates weighted prediction for each validation time-point (regular SL)
+    pred <- data.frame(pred = as.matrix((pred_individual_SL[[i]])) %*% weights_ind_sl[[i]])
+    names(pred) <- paste0("Sample",samples[i])
+    pred
   })
   
-  #Evaluate loss over final SuperLearners!
-  #Note that this is the loss over validation samples
-  #Evaluate the loss for discrete learners, for each sample:
+  #Connect weights and learners:
+  fit_coef <- lapply(seq_along(tasks), function(i){
+    data.frame(learners=learners,coefs=weights[[i]],convex_coefs=(weights[[i]]/sum(weights[[i]])))
+  })
+  
+  ### Evaluate loss over final SuperLearners!
+  #Note that this is the loss over validation samples. Evaluate the loss for discrete learners, for each sample:
   if(length(unique(train_all[,outcome]))>2){
     #Continuous outcome
     loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(preds_fin[[i]]),truths[[i]])}))
     loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_regular_SL[[i]]),truths[[i]])}))
-    #loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_regular_individual_SL[[i]]),truths[[i]])}))
+    loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss_cont(t(pred_individual_SL[[i]]),truths[[i]])}))
   }else{
     #Binary outcome
     loss_online_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(preds_fin[[i]]),truths[[i]])}))
     loss_regular_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_SL[[i]]),truths[[i]])}))
-    #loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_regular_individual_SL[[i]]),truths[[i]])}))
+    loss_individual_SL<-unlist(lapply(seq_along(tasks), function(i){eval_loss(t(pred_individual_SL[[i]]),truths[[i]])}))
   }
   
   losses_all<-cbind.data.frame(loss_online_SL=loss_online_SL,
-                               loss_regular_SL=loss_regular_SL)
-  #loss_individual_SL=loss_individual_SL
-  
+                               loss_regular_SL=loss_regular_SL,
+                               loss_individual_SL=loss_individual_SL)
+
   return(list(#Final, weighted prediction.
     preds_fin=preds_fin, 
     #Final, weighted prediction for the regular SL
     pred_regular_SL=pred_regular_SL,
     #Final, weighted prediction for the one sample SL
-    #pred_regular_individual_SL=pred_regular_individual_SL,
+    pred_individual_SL=pred_individual_SL,
     #t+h truth for all the samples.
     truth=truths, 
     #Predictions for each individual learner.
