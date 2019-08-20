@@ -31,26 +31,33 @@ eval_loss_cont <- function(ps, y){
 #####################
 ### Global learner
 #####################
+
 global_SL = function(train_all, t, outcome, 
-                     sl, stack_pool, stack_screen, 
+                     sl, stack_pool, stack_screen=NULL, 
                      covars, covars_wbaseline,
-                     test_size, first_window, mini_batch){
+                     test_size=5, mini_batch=5, 
+                     cv="folds_rolling_origin", first_window=1, window_size=1){
   
   #Pool across time (fitting on all data up to time t)
   #Here, we impose a Markov order assumption
-  
-  ##This treats time points and samples as independent. 
-  #Since here we are pulling across time, this should be ok
-  
   test_data <- train_all[train_all$time<=t,]
   
   #Set up proper cross-validation for multiple time-series data:
-  folds <- origami::make_folds(test_data,
-                               fold_fun = folds_rolling_origin_pooled,
-                               t=t,
-                               first_window = first_window,
-                               validation_size = test_size, gap = 0,
-                               batch = mini_batch)
+  if(cv=="folds_rolling_origin"){
+    folds <- origami::make_folds(test_data,
+                                 fold_fun = folds_rolling_origin_pooled,
+                                 t=t,
+                                 first_window = first_window,
+                                 validation_size = test_size, gap = 0,
+                                 batch = mini_batch)
+  }else if(cv=="folds_rolling_window"){
+    folds <- origami::make_folds(test_data,
+                                 fold_fun = folds_rolling_window_pooled,
+                                 t=t,
+                                 window_size = window_size,
+                                 validation_size = test_size, gap = 0,
+                                 batch = mini_batch)
+  }
   
   # create the sl3 task with time-varying covariates
   task <- make_sl3_Task(
@@ -91,7 +98,10 @@ global_SL = function(train_all, t, outcome,
 #######################
 ### Individual learner
 #######################
-individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
+
+individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
+                         first_window=1, window_size=5,
+                         test_size,mini_batch,
                          covars_wbaseline,stack_individual){
   
   #Subset to sample with subject id id
@@ -100,13 +110,21 @@ individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
   #Use data until time point until time t:
   test_data <- train_one[train_one$time<=t,]
   
-  #Set up proper cross-validation for time-series data:
-  folds <- origami::make_folds(test_data,
-                               fold_fun = folds_rolling_origin,
-                               first_window = first_window,
-                               validation_size = test_size, gap = 0,
-                               batch = mini_batch)
-  
+  #Set up proper cross-validation for single time-series data:
+  if(cv=="folds_rolling_origin"){
+    folds <- origami::make_folds(test_data,
+                                 fold_fun = folds_rolling_origin,
+                                 first_window = first_window,
+                                 validation_size = test_size, gap = 0,
+                                 batch = mini_batch)
+  }else if(cv=="folds_rolling_window"){
+    folds <- origami::make_folds(test_data,
+                                 fold_fun = folds_rolling_window,
+                                 window_size = window_size,
+                                 validation_size = test_size, gap = 0,
+                                 batch = mini_batch)
+  }
+
   # create the sl3 task
   task <- make_sl3_Task(
     data = test_data, covariates = covars_wbaseline,
@@ -139,25 +157,31 @@ individual_SL = function(train_all,t,id,first_window,test_size,mini_batch,
 
 ### For each t, derive weights at horizon h
 #train_all: the full dataset used
-#t: time until which we train the SuperLearners
 #outcome: name of the outcome column.
+#t: time until which we train the SuperLearners
 #stack_pool: sl3 stack object corresponding to the learners used for the Global Super Learner. The learners in it should not use screeners.
 #stack_individual: sl3 stack object corresponding to the Individual Super Learner. The learners in it should not use screeners.
-#sl: sl3 SuperLearner object.
 #stack_screen: sl3 stack object. The learners in it should use screeners.
+#sl: sl3 SuperLearner object.
 #covars: Time varying covariates
 #covars_baseline: Baseline covariates
+#id: Estimate Combined SuperLearner performance over a single subject. Final loss and weights will be id specific.
+#cv: Time-series cross-validation used. Options are folds_rolling_origin and folds_rolling_window. 
 #gap: time between the last trained time point and the first prediction time point
 #h: length of horizon at which we evaluate the loss
-#first_window: size of the training set (for example, 1 to first window).
-#test_size: size of the validation set (in time points).
-#mini_batch: by how many time points to increase the training set after the first iteration?
+#test_size: size of the validation set used in the training procedure (in time points).
+#mini_batch: increase in the training set size from the first iteration in time points. 
+#first_window: size of the training set (for example, 1 to first window). This parameter is specific to the 
+#folds_rolling_origin time-series cross-validation.
+#window_size: size of the training set (always of size window_size). This parameter is specific to the 
+#folds_rolling_window time-series cross-validation.
 
 combine_SL = function(train_all, outcome, t, 
                       stack_pool, stack_individual, stack_screen=NULL, sl,
                       covars, covars_baseline,
-                      gap=0,h=1, first_window=1,test_size=1, mini_batch=1,
-                      id=NULL){
+                      id=NULL, cv="folds_rolling_origin",
+                      gap=0, h=1, test_size=5, mini_batch=5,
+                      first_window=1, window_size=5){
   
   #Combine time-varying and baseline covariates
   covars_wbaseline <- c(covars, covars_baseline)
@@ -175,12 +199,13 @@ combine_SL = function(train_all, outcome, t,
   global_SL_t<-global_SL(train_all=train_all, t=t, outcome=outcome, 
                          sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
                          covars=covars, covars_wbaseline=covars_wbaseline,
-                         test_size=test_size, first_window=first_window, 
-                         mini_batch=mini_batch)
+                         test_size=test_size, mini_batch=mini_batch,
+                         cv=cv, first_window=first_window, window_size=window_size)
   
   #Create individual SLs for all samples:
-  individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x,
+  individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x, cv=cv,
                                                                first_window=first_window,
+                                                               window_size=window_size,
                                                                test_size=test_size,
                                                                mini_batch=mini_batch,
                                                                covars_wbaseline=covars_wbaseline,

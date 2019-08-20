@@ -123,3 +123,31 @@ folds_rolling_origin_pooled <- function(n, t, first_window, validation_size,
   })
   return(folds_rolling_origin)
 }
+
+folds_rolling_window_pooled <- function(n, t, window_size, validation_size,
+                                        gap = 0, batch = 1) {
+  
+  message(paste("Processing", n/t, "samples with", t, "time points."))
+  
+  #Index the observations
+  dat <- cbind.data.frame(index=seq(n),time=rep(seq(t),n/t),id=rep(seq(n/t), each=t))
+  ids <- unique(dat$id)
+  
+  # establish rolling window forecast for time-series cross-validation
+  rolling_window_skeleton <- folds_rolling_window(t, window_size,
+                                                  validation_size, gap, batch)
+  
+  folds_rolling_window <- lapply(rolling_window_skeleton, function(h){
+    train_indices <- lapply(ids, function(i){
+      train <- dat[dat$id == i, ]
+      train[h$training_set, ]$index
+    })
+    val_indices <- lapply(ids, function(j){
+      val <- dat[dat$id == j, ]
+      val[h$validation_set, ]$index
+    })
+    make_fold(v=h$v, training_set=unlist(train_indices), 
+              validation_set=unlist(val_indices))
+  })
+  return(folds_rolling_window)
+}

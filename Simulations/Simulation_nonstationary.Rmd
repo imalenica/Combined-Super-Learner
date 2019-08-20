@@ -492,7 +492,7 @@ run_simulation <- function(id=20403, t=2, niter = 1,
                         future = future, seed = seed))
   if(noise){
     abpmean_pooled <- abpmean_pooled + arima.sim(model=list(order = c(0, 0, 0)), n=nsim)
-    abpmean_individual <- abpmean_individual + arima.sim(model=list(order = c(0, 0, 0)), n=nsim)
+    #abpmean_individual <- abpmean_individual + arima.sim(model=list(order = c(0, 0, 0)), n=nsim)
   }
   
   time <- seq(1, nsim, 1)
@@ -668,38 +668,97 @@ sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
 # Run the Combined Super Learner
 ######################################
 
-#TO DO: Note that folds_rolling_window would actually be a much more suited CV for nonstationary ts.
 times <-as.list(seq(30, 300, by = 30))
 
 comSLsim_res <- lapply(times, function(x){
-  #Ignore the fact we technically have an interrupted ts
-  combine_SL(t = x, train_all = train_all, outcome=outcome, 
+  if(x %in% c(60,120,180,240,300)){
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
              stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
              covars=covars, covars_baseline = covars_baseline,
-             gap=0, h=30, first_window=10, test_size=10, mini_batch=5,
-             id=id)
+             id=id, cv="folds_rolling_origin",
+             gap=0, h=15, test_size=15, mini_batch=5, first_window=15)
+  }else{
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_origin",
+             gap=30, h=15, test_size=15, mini_batch=5, first_window=15)
+  }
+  })
+
+comSLsim_res_cvrw <- lapply(times, function(x){
+  if(x %in% c(60,120,180,240,300)){
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_window",
+             gap=0, h=15, test_size=15, mini_batch=5, window_size=15)
+  }else{
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_window",
+             gap=30, h=15, test_size=15, mini_batch=5, window_size=15)
+  }
 })
 
-save(comSLsim_res, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results", id, ".Rdata")), compress = TRUE)
+save(comSLsim_res, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results_cvro_", id, ".Rdata")), compress = TRUE)
+save(comSLsim_res_cvrw, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results_cvrw_", id, ".Rdata")), compress = TRUE)
 ```
 
 ```{r, echo=FALSE, eval=TRUE}
-load(here::here("Results/Nonstationary_ts", "CombineSL_results20403.Rdata"))
+load(here::here("Results/Nonstationary_ts", "CombineSL_results_cvro_20403.Rdata"))
+load(here::here("Results/Nonstationary_ts", "CombineSL_results_cvrw_20403.Rdata"))
 times <-as.list(seq(30, 300, by = 30))
 
 #############################################
 # Assess the performance at each time step
 #############################################
 
-#Grab algorithm with smallest loss:
+### Grab algorithm with smallest loss:
 comSLsim_loss <- lapply(seq(comSLsim_res), function(i){
   names(which.min(comSLsim_res[[i]]$loss[[1]]))
 })
 comSLsim_loss <- cbind.data.frame(time=unlist(times), learner=unlist(comSLsim_loss))
 
+comSLsim_loss_cvrw <- lapply(seq(comSLsim_res_cvrw), function(i){
+  names(which.min(comSLsim_res_cvrw[[i]]$loss[[1]]))
+})
+comSLsim_loss_cvrw <- cbind.data.frame(time=unlist(times), learner=unlist(comSLsim_loss_cvrw))
+
 comSLsim_loss %>%
   kable(format = "latex", booktabs = T, digits = 4, longtable = T,
-        caption = "Picked learner at varying training size") %>%
+        caption = "Picked learner at varying training size with Rolling Origin CV") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+comSLsim_loss_cvrw %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "Picked learner at varying training size with Rolling Window CV") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+
+
+### Compare Combine SuperLearner at each time-point
+comSLsim_loss_all <- lapply(seq(comSLsim_res), function(i){
+  comSLsim_res[[i]]$losses_all
+})
+comSLsim_loss_all <- cbind.data.frame(time=unlist(times), matrix(unlist(comSLsim_loss_all),nrow = length(comSLsim_res),ncol = 3))
+names(comSLsim_loss_all)<-c("time","loss_online_SL", "loss_regular_SL", "loss_individual_SL")
+
+comSLsim_loss_all_cvrw <- lapply(seq(comSLsim_res_cvrw), function(i){
+  comSLsim_res_cvrw[[i]]$losses_all
+})
+comSLsim_loss_all_cvrw <- cbind.data.frame(time=unlist(times), matrix(unlist(comSLsim_loss_all_cvrw),nrow = length(comSLsim_res_cvrw),ncol = 3))
+names(comSLsim_loss_all_cvrw)<-c("time","loss_online_SL", "loss_regular_SL", "loss_individual_SL")
+
+comSLsim_loss_all %>%
+  kable(format = "latex", booktabs = T, digits = 16, longtable = T,
+        caption = "Picked SL at varying training size with Rolling Origin CV") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+comSLsim_loss_all_cvrw %>%
+  kable(format = "latex", booktabs = T, digits = 16, longtable = T,
+        caption = "Picked SL at varying training size with Rolling Window CV") %>%
   kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
                 position = "center")
 ```
