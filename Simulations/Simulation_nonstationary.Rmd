@@ -1,7 +1,7 @@
 ---
 title: "Test Nonstationary Time Series Prediction"
 author: "Ivana Malenica"
-date: "August 2019"
+date: "Summer 2019"
 output:
   pdf_document:
     latex_engine: xelatex
@@ -63,7 +63,7 @@ were classified as any patient that exhibited a hypotensive event. The
 non-hypotensive never experienced a hypotensive event.
 
 \vspace{.2in}
-```{r editdata, echo = FALSE, message = FALSE, warning = FALSE}
+```{r editdata, echo = FALSE, eval=FALSE, message = FALSE, warning = FALSE}
 load(here::here("Data", "mimic_im.Rdata"))
 
 #Limit data to the first 8 hours
@@ -109,7 +109,11 @@ sample_y0<-events[events$hypo_event==0,1]
 Selects the optimal autoregressive and moving average orders $p$ 
 and $q$ based on a chosen information criterion (AICc by default) from a local 
 search over a few regions of values. In parricular, we fit individual ARIMA models
-as well as a pooled ARIMA model estimated from multiple time-series.
+as well as a pooled ARIMA model estimated from multiple time-series. As such, 
+the resuluting models include:
+
+* Pooled model over all samples,
+* Individual models for each inidvidual with at least one hypotensive episode. 
 
 ```{r model, echo = FALSE, eval = FALSE, message = FALSE, warning = FALSE}
 run_auto_arima <- function(df, outcome = "abpmean", id=NULL, pool=TRUE) {
@@ -314,6 +318,8 @@ save(fit_individuals, file = here::here("Results/Nonstationary_ts", "fit_individ
      compress = TRUE)
 save(sub_samples, file = here::here("Results/Nonstationary_ts", "sub_samples.Rdata"),
      compress = TRUE)
+save(df, file = here::here("Results/Nonstationary_ts", "data.Rdata"),
+     compress = TRUE)
 ```
 
 \newpage
@@ -329,6 +335,7 @@ of MAE for different random samples.
 load(here::here("Results/Nonstationary_ts","fit_pooled.Rdata"))
 load(here::here("Results/Nonstationary_ts","fit_individuals.Rdata"))
 load(here::here("Results/Nonstationary_ts","sub_samples.Rdata"))
+load(here::here("Results/Nonstationary_ts","data.Rdata"))
 
 ##Pooled stats
 #Pooled vs. assessed on separate models accuracy
@@ -425,8 +432,8 @@ plot_forecast(type = "individual", id = 20403)
 plot_forecast(type = "pooled", id = 20403)
 
 #Example of pooled forecast doing better
-plot_forecast(type = "individual", id = 11380)
-plot_forecast(type = "pooled", id = 11380)
+plot_forecast(type = "individual", id = 1012)
+plot_forecast(type = "pooled", id = 1012)
 
 ```
 
@@ -440,7 +447,8 @@ time series. We simulate from both individual
 trajectories and pooled trajectories, while adding extra noise. 
 In particular, we combine the two time-series generated at random times
 through-out the time-series, creating an interrupted time-series at 
-`t=2` times.  
+`t` times. As such, the resulting time-series is a mixture of 
+the individual and pooled model, mixed at pre-specified time-point. 
 
 * By default, the error series is assumed normally distributed and generated 
   using `rnorm`. However, we set `bootstrap=TRUE`, so the residuals are 
@@ -451,6 +459,9 @@ through-out the time-series, creating an interrupted time-series at
   depend on the data at all. When `future=FALSE` and the model is 
   non-stationary, the location of the sample paths is arbitrary, so they all 
   start at the value of the first observation.
+  
+In addition to the combined (non-stationary) time-series, we also generate
+simulated data sets for the individual and pooled time-series models. 
   
 ```{r, eval = FALSE, echo = FALSE, warning = FALSE}
 
@@ -532,55 +543,46 @@ run_simulation <- function(id=20403, t=2, niter = 1,
 ```{r, eval = FALSE, echo = FALSE, warning = FALSE}
 ### Simulate dataset used for the Combined SL
 id<-20403
-test_sample <- run_simulation(id=id, noise = TRUE, t = 2)
+test_sample <- run_simulation(id=id, noise = TRUE, t = 1)
 
 #Get all the rest of the samples:
 new_sub_samples<-sub_samples[!sub_samples %in% id]
 new_sub_df<-df[df$subject_id %in% new_sub_samples, c("subject_id","time", "gender","age","care_unit", "admission_type_descr","sapsi_first", "sofa_first", "amine","sedation","ventilation", "abpmean", "Y1")]
 new_sub_df<-data.frame(new_sub_df)
-new_sub_df<-rbind.data.frame(new_sub_df, test_sample$dat)
-save(new_sub_df, file = here::here("Results/Nonstationary_ts", paste0("full_test_sample", id, ".Rdata")), compress = TRUE)
-save(test_sample, file = here::here("Results/Nonstationary_ts", paste0("test_sample", id, ".Rdata")), compress = TRUE)
-```
 
-```{r, eval = TRUE, echo = FALSE, warning = FALSE}
-load(here::here("Results/Nonstationary_ts","full_test_sample20403.Rdata"))
-load(here::here("Results/Nonstationary_ts","test_sample20403.Rdata"))
+###############################
+# Non-stationary time-series
+###############################
+nonstat_sub_df<-rbind.data.frame(new_sub_df, test_sample$dat)
+save(nonstat_sub_df, file = here::here("Results/Nonstationary_ts/t1", paste0("full_t1_test_sample", id, ".Rdata")), compress = TRUE)
+save(test_sample, file = here::here("Results/Nonstationary_ts/t1", paste0("test_t1_sample", id, ".Rdata")), compress = TRUE)
 
-#Plot the new time-series, and compare to the original 
-#individual and pooled:
-id<-20403
+###############################
+# Individual time-series
+###############################
+dat <- test_sample$dat
+dat$abpmean <- test_sample$abpmean_individual
+ind_sub_df<-rbind.data.frame(new_sub_df, dat)
+save(ind_sub_df, file = here::here("Results/Nonstationary_ts/t1", paste0("ind_t1_test_sample", id, ".Rdata")), compress = TRUE)
 
-#Combine for one plot
-ggplot() + geom_line(aes(x = as.numeric(time(test_sample$abpmean_combined)),
-                         y = as.numeric(test_sample$abpmean_combined),
-                         col = "blue")) +
-           geom_line(aes(x = as.numeric(time(test_sample$abpmean_individual)),
-                         y = as.numeric(test_sample$abpmean_individual),
-                         col = "red")) +
-           scale_color_discrete(name = "",
-                                labels = c("Combined forecast", "Individual forecast")) +
-           labs(title = paste0("Creation of an combined forecast for subject ", id),
-                x = "Time in test set (minutes)",
-                y = "Mean blood pressure") + theme(legend.position="top")
-
-ggplot() + geom_line(aes(x = as.numeric(time(test_sample$abpmean_combined)),
-                         y = as.numeric(test_sample$abpmean_combined),
-                         col = "blue")) +
-           geom_line(aes(x = as.numeric(time(test_sample$abpmean_pooled)),
-                         y = as.numeric(test_sample$abpmean_pooled),
-                         col = "red")) +
-           scale_color_discrete(name = "",
-                                labels = c("Combined forecast", "Pooled forecast")) +
-           labs(title = paste0("Creation of an combined forecast for subject ", id),
-                x = "Time in test set (minutes)",
-                y = "Mean blood pressure") + theme(legend.position="top")
+###############################
+# Pooled time-series
+###############################
+dat <- test_sample$dat
+dat$abpmean <- test_sample$abpmean_pooled
+pool_sub_df<-rbind.data.frame(new_sub_df, dat)
+save(pool_sub_df, file = here::here("Results/Nonstationary_ts/t1", paste0("pool_t1_test_sample", id, ".Rdata")), compress = TRUE)
 ```
 
 # Fit combined super learner
 
-We fit the combined (global and individual) super learner across a range
-of training data lengths. Ideally, we would like to see the Combined SL
+We fit the Combined Super Learner, Individual Super Learner and the 
+Regular Super Learner across a range
+of training data lengths:
+
+* t=(30, 60, 90, 120, 150, 180, 210, 240, 270, 300)
+
+Ideally, we would like to see the Combined SL
 switch between giving more weights to individual SL and pooled SL, depending
 on where in the time-series we are and how much data we use for training.
 
@@ -606,26 +608,40 @@ In addition, we include the following time-varying covariates:
 
 The combined online super learner also uses the individual super learner, which 
 learns only from one sample at a time. For the individual super learner, we 
-incorporate the following:
+incorporate the above described covariates as well. In addition, we consider two 
+different Cross-Validation schemes:
 
-* baseline covariates mentioned above
-* rolling origin cross-validation for the time series with
-  * initial training set size 10 minutes
-  * test set size 10 minutes
+* Rolling Origin:
+  * initial training set size 15 minutes
+  * test set size 15 minutes
   * increase training set size by increments of 5 minutes
 
-For the combined super learner, we incorporate a gap of 30 minutes between the 
-last trained time point and the first prediction time point. 
+* Rolling Window:  
+  * each window size is 15 minutes
+  * test set size 15 minutes
+  * increase training set size by increments of 5 minutes
+  
+For the combined super learner, we  incorporate a gap of 30 minutes between the 
+last trained time point and the first prediction time point. If round hour, we include
+a gap of 0, due to the data-setup. Therefore, the
+prediction is for a 15 minute period 30 minutes in the future (since the last 
+trained time-point). 
 
+As explored in previous simulations, we only consider the binary outcome, 
+instead of the continuous (even though the combined Super Learner has support for both).
+  
 For the base learning library, we consider 8 variations of xgboost. 
 
 ```{r, eval = FALSE, echo = FALSE, warning = FALSE}
-load(here::here("Results/Nonstationary_ts", "full_test_sample20403.Rdata"))
+##########################################
+# Combined time-series with t=1
+##########################################
+load(here::here("Results/Nonstationary_ts/t1", "full_t1_test_sample20403.Rdata"))
 
 source(here::here("R/CombinedOnlineSL.R"))
 source(here::here("R/utils_mimic.R"))
 
-train_all <- new_sub_df
+train_all <- nonstat_sub_df
 #factor_to_indicators...
 id=20403
 
@@ -702,13 +718,153 @@ comSLsim_res_cvrw <- lapply(times, function(x){
   }
 })
 
-save(comSLsim_res, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results_cvro_", id, ".Rdata")), compress = TRUE)
-save(comSLsim_res_cvrw, file = here::here("Results/Nonstationary_ts", paste0("CombineSL_results_cvrw_", id, ".Rdata")), compress = TRUE)
+save(comSLsim_res, file = here::here("Results/Nonstationary_ts/SL_fits", paste0("CombinedTS_results_t1_cvro_", id, ".Rdata")), compress = TRUE)
+save(comSLsim_res_cvrw, file = here::here("Results/Nonstationary_ts/SL_fits", paste0("CombinedTS_results_t1_cvrw_", id, ".Rdata")), compress = TRUE)
+```
+
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+##########################################
+# Individual time-series with t=1
+##########################################
+load(here::here("Results/Nonstationary_ts/t1", "ind_test_t1_sample20403.Rdata"))
+
+source(here::here("R/CombinedOnlineSL.R"))
+source(here::here("R/utils_mimic.R"))
+
+train_all <- ind_sub_df
+#factor_to_indicators...
+id=20403
+
+######################################
+#Specify the covariates and outcome:
+######################################
+
+outcome <- "Y1"
+covars_baseline <- c("gender", "age","care_unit", "admission_type_descr", 
+                      "sapsi_first", "sofa_first")
+covars <- c("amine","sedation","ventilation","time")
+
+#######################################
+# Set the SL libraries:
+#######################################
+
+grid_params = list(max_depth=c(4,8),
+                   eta = c(0.001, 0.01, 0.1, 0.2))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+  })
+
+stack <- make_learner(
+  Stack, xgb_learners[[1]], xgb_learners[[2]], xgb_learners[[3]],
+  xgb_learners[[4]], xgb_learners[[5]], xgb_learners[[6]], xgb_learners[[7]], xgb_learners[[8]]
+)
+
+### Learners with screeners:
+screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
+cor_pipeline <- make_learner(Pipeline, screen_cor, stack)
+stack_screen <- make_learner(Stack, cor_pipeline, stack)
+
+###Regular Super-Learner option:
+metalearner <- make_learner(Lrnr_nnls)
+sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
+
+######################################
+# Run the Combined Super Learner
+######################################
+
+times <-as.list(seq(30, 300, by = 30))
+
+comSLsim_res <- lapply(times, function(x){
+  if(x %in% c(60,120,180,240,300)){
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_origin",
+             gap=0, h=15, test_size=15, mini_batch=5, first_window=15)
+  }else{
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_origin",
+             gap=30, h=15, test_size=15, mini_batch=5, first_window=15)
+  }
+  })
+
+comSLsim_res_cvrw <- lapply(times, function(x){
+  if(x %in% c(60,120,180,240,300)){
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_window",
+             gap=0, h=15, test_size=15, mini_batch=5, window_size=15)
+  }else{
+    combine_SL(t = x, train_all = train_all, outcome=outcome, 
+             stack_pool=stack, stack_individual=stack, stack_screen = stack_screen, sl=sl,
+             covars=covars, covars_baseline = covars_baseline,
+             id=id, cv="folds_rolling_window",
+             gap=30, h=15, test_size=15, mini_batch=5, window_size=15)
+  }
+})
+
+save(comSLsim_res, file = here::here("Results/Nonstationary_ts/SL_fits", paste0("IndividualTS_results_cvro_", id, ".Rdata")), compress = TRUE)
+save(comSLsim_res_cvrw, file = here::here("Results/Nonstationary_ts/SL_fits", paste0("IndividualTS_results_cvrw_", id, ".Rdata")), compress = TRUE)
+```
+
+# Results for the combined (non-stationary) time-series with t=1
+
+The combined time-series, we mixed it at only at `t=1`. As such, we 
+expect the Combined Super Learner to switch from giving more 
+weights to the Individual SL for the first half of the time-series, 
+than the Combined SL until the end of the simulated time-series. 
+
+We report the following:
+
+* Visual illustration of the combined time-series
+* Learner with the minimial loss at each training time with 
+  * Rolling Origin Cross-Validation
+  * Rolling Window Cross-Validation
+* Comparison of the Combined, Individual and Regular Super Learner at 
+each training time. 
+
+```{r, eval = TRUE, echo = FALSE, warning = FALSE}
+load(here::here("Results/Nonstationary_ts/t1","full_test_t1_sample20403.Rdata"))
+load(here::here("Results/Nonstationary_ts/t1","test_t1_sample20403.Rdata"))
+
+#Plot the new time-series, and compare to the original 
+#individual and pooled:
+id<-20403
+
+#Combine for one plot
+ggplot() + geom_line(aes(x = as.numeric(time(test_sample$abpmean_combined)),
+                         y = as.numeric(test_sample$abpmean_combined),
+                         col = "blue")) +
+           geom_line(aes(x = as.numeric(time(test_sample$abpmean_individual)),
+                         y = as.numeric(test_sample$abpmean_individual),
+                         col = "red")) +
+           scale_color_discrete(name = "",
+                                labels = c("Combined forecast", "Individual forecast")) +
+           labs(title = paste0("Creation of an combined forecast for subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") + theme(legend.position="top")
+
+ggplot() + geom_line(aes(x = as.numeric(time(test_sample$abpmean_combined)),
+                         y = as.numeric(test_sample$abpmean_combined),
+                         col = "blue")) +
+           geom_line(aes(x = as.numeric(time(test_sample$abpmean_pooled)),
+                         y = as.numeric(test_sample$abpmean_pooled),
+                         col = "red")) +
+           scale_color_discrete(name = "",
+                                labels = c("Combined forecast", "Pooled forecast")) +
+           labs(title = paste0("Creation of an combined forecast for subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") + theme(legend.position="top")
 ```
 
 ```{r, echo=FALSE, eval=TRUE}
-load(here::here("Results/Nonstationary_ts", "CombineSL_results_cvro_20403.Rdata"))
-load(here::here("Results/Nonstationary_ts", "CombineSL_results_cvrw_20403.Rdata"))
+load(here::here("Results/Nonstationary_ts/SL_fits", "CombinedTS_results_t1_cvro_20403.Rdata"))
+load(here::here("Results/Nonstationary_ts/SL_fits", "CombinedTS_results_t1_cvrw_20403.Rdata"))
 times <-as.list(seq(30, 300, by = 30))
 
 #############################################
@@ -762,4 +918,5 @@ comSLsim_loss_all_cvrw %>%
   kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
                 position = "center")
 ```
+
 
