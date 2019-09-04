@@ -151,3 +151,27 @@ folds_rolling_window_pooled <- function(n, t, window_size, validation_size,
   })
   return(folds_rolling_window)
 }
+
+eval_missingness <- function(min, dataset, total_hrs = 5) {
+  sec <- min*60
+  total_min <- total_hrs*60
+  dataset <- dataset %>%
+    dplyr::group_by(subject_id) %>%
+    mutate(init_time_and_date = min(time_and_date)) %>%
+    mutate(min_elapsed = as.integer((time_and_date - init_time_and_date) / 60) + 1)
+  d <- dataset %>%
+    dplyr::group_by(subject_id) %>%
+    dplyr::filter(min_elapsed <= total_min)
+  df_full <- d %>%
+    dplyr::group_by(subject_id) %>%
+    dplyr::filter(min_elapsed == total_min)
+  d <- d[(d$subject_id %in% df_full$subject_id),]
+  dd <- d[order(d$subject_id, d$time_and_date),]
+  dd$tdiff <- unlist(tapply(dd$time_and_date, INDEX = dd$subject_id,
+                            FUN = function(x) c(0, diff(as.numeric(x)))))
+  df_bad <- dd %>% dplyr::filter(tdiff >= sec)
+  d_complete <- d[!(d$subject_id %in% df_bad$subject_id),]
+  list(num = length(unique(d_complete$subject_id)), dat = d_complete)
+}
+
+
