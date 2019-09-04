@@ -9,3 +9,4 @@ Simulations/*_files
 *.tex
 Reports/Preprocessing_cache/
 Simulations/arima_sample*.Rmd
+*.rds
