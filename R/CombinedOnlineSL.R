@@ -35,7 +35,7 @@ eval_loss_cont <- function(ps, y){
 global_SL = function(train_all, t, outcome, 
                      sl, stack_pool, stack_screen=NULL, 
                      covars, covars_wbaseline,
-                     test_size=5, mini_batch=5, 
+                     test_size=5, mini_batch=5, V=NULL,
                      cv="folds_rolling_origin", first_window=1, window_size=1){
   
   #Pool across time (fitting on all data up to time t)
@@ -57,6 +57,10 @@ global_SL = function(train_all, t, outcome,
                                  window_size = window_size,
                                  validation_size = test_size, gap = 0,
                                  batch = mini_batch)
+  }else if(cv=="folds_vfold"){
+    folds <- origami::make_folds(test_data,
+                                 fold_fun = folds_vfold,
+                                 V=V)
   }
   
   # create the sl3 task with time-varying covariates
@@ -201,6 +205,11 @@ combine_SL = function(train_all, outcome, t,
                          covars=covars, covars_wbaseline=covars_wbaseline,
                          test_size=test_size, mini_batch=mini_batch,
                          cv=cv, first_window=first_window, window_size=window_size)
+  global_SL_t_reg<-global_SL(train_all=train_all, t=t, outcome=outcome, 
+                         sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
+                         covars=covars, covars_wbaseline=covars_wbaseline,
+                         test_size=test_size, mini_batch=mini_batch,
+                         cv="folds_vfold", V=10, first_window=first_window, window_size=window_size)
   
   #Create individual SLs for all samples:
   individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x, cv=cv,
@@ -227,9 +236,12 @@ combine_SL = function(train_all, outcome, t,
 
   ### Get all predictions:
   
-  #Regular SL: (using sl3 directly)
+  #### Regular SL: (using sl3 directly)
   #pred_regular_SL <- lapply(tasks_baseline, function(task){global_SL_t$regularSL$predict(task)})
-  #Global SL:
+  pred_global_SL_baseline_reg <- lapply(tasks_baseline, function(task){matrix(unlist(lapply(1:lrn, function(x){
+    global_SL_t_reg$globalSL_baseline$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
+  
+  #### Global SL:
   pred_global_SL <- lapply(tasks, function(task){matrix(unlist(lapply(1:lrn, function(x){
     global_SL_t$globalSL$fit_object$learner_fits[[x]]$predict(task)})),nrow=h,ncol=lrn)})
   #Global SL with baseline covariates:
@@ -250,7 +262,8 @@ combine_SL = function(train_all, outcome, t,
     pred_global_SL_screen<-NULL
     pred_global_SL_screen_baseline<-NULL
   }
-  #Individual SL:
+  
+  #### Individual SL:
   pred_individual_SL<-lapply(seq_along(tasks), function(i){
     matrix(unlist(lapply(1:lrn, function(x){
       individual_SL_t[[i]]$individualSL$fit_object$learner_fits[[x]]$predict(tasks_baseline[[i]])})),nrow=h,ncol=lrn)
