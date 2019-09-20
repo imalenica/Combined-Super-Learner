@@ -434,11 +434,11 @@ df <- df %>%
 ############################## final touches and save ##########################
 df <- df[,c(1,3,27,4:26)]
 
-df$care_unit <- ifelse(df$care_unit == 1, "MICU",
-                       ifelse(df$care_unit == 2, "SICU",
-                              ifelse(df$care_unit == 4, "CSRU",
-                                     ifelse(df$care_unit == 5, "NICU",
-                                            ifelse(df$care_unit == 6, "CCU", 
+df$care_unit <- ifelse(df$care_unit == "1", "MICU",
+                       ifelse(df$care_unit == "2", "SICU",
+                              ifelse(df$care_unit == "4", "CSRU",
+                                     ifelse(df$care_unit == "5", "NICU",
+                                            ifelse(df$care_unit == "6", "CCU", 
                                                    NA)))))
 
 mimic <- run_class(data.frame(df),
@@ -450,5 +450,13 @@ mimic <- run_class(data.frame(df),
                    cols_num = c("age", "sapsi_first","sofa_first", "hr", "spo2", 
                                 "abpsys", "abpdias","abpmean", "bmi"))
 
-mimic_all <- mimic[order(mimic$subject_id, mimic$time_and_date), ]
+mimic_ids <- mimic %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::select(abpmean) %>%
+  summarise_each(funs(n_distinct))
+mimic_ids_bad <- dplyr::filter(mimic_ids, abpmean == 1)
+mimic_distinct <- mimic[!(mimic$subject_id %in% mimic_ids_bad$subject_id),]
+
+mimic_all <- mimic_distinct[order(mimic_distinct$subject_id, 
+                                  mimic_distinct$time_and_date), ]
 save(mimic_all, file = here::here("Data","mimic_all.Rdata"), compress = TRUE)
