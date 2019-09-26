@@ -366,7 +366,7 @@ combine_SL = function(train_all, outcome, t,
   })
   #Get weights for just the regular SuperLearner
   weights_reg_sl <- lapply(seq_along(tasks), function(i){
-    get_weights(t(pred_global_SL_baseline[[i]]),truths[[i]], l=0)
+    get_weights(t(pred_global_SL_baseline_reg[[i]]),truths[[i]], l=0)
   })
   #Get weights for just the individual SuperLearner
   weights_ind_sl <- lapply(seq_along(tasks), function(i){
@@ -384,7 +384,7 @@ combine_SL = function(train_all, outcome, t,
   #Get the regular SL prediction
   pred_regular_SL <- lapply(seq_along(tasks), function(i){
     #Generates weighted prediction for each validation time-point (regular SL)
-    pred <- data.frame(pred = as.matrix((pred_global_SL_baseline[[i]])) %*% weights_reg_sl[[i]])
+    pred <- data.frame(pred = as.matrix((pred_global_SL_baseline_reg[[i]])) %*% weights_reg_sl[[i]])
     names(pred) <- paste0("Sample",samples[i])
     pred
   })
