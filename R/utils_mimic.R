@@ -169,7 +169,7 @@ eval_missingness <- function(min, dataset, total_hrs = 5) {
   dd <- d[order(d$subject_id, d$time_and_date),]
   dd$tdiff <- unlist(tapply(dd$time_and_date, INDEX = dd$subject_id,
                             FUN = function(x) c(0, diff(as.numeric(x)))))
-  df_bad <- dd %>% dplyr::filter(tdiff >= sec)
+  df_bad <- dd %>% dplyr::filter(tdiff > sec)
   d_complete <- d[!(d$subject_id %in% df_bad$subject_id),]
   list(num = length(unique(d_complete$subject_id)), dat = d_complete)
 }
