@@ -1,0 +1,245 @@
+---
+title: "Variable Importance for a Time-Series"
+author: "Ivana Malenica"
+date: "September, 2019"
+output:
+  pdf_document:
+    keep_tex: yes
+    latex_engine: xelatex
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{lscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{float}
+---
+
+```{r setup, echo = FALSE}
+options(warn=-1)
+suppressMessages(library(xtable))
+suppressMessages(library(here))
+suppressMessages(library(tidyverse))
+suppressMessages(library(data.table))
+suppressMessages(library(sl3))
+suppressMessages(library(origami))
+suppressMessages(library(SuperLearner))
+suppressMessages(library(dplyr))
+suppressMessages(library(kableExtra))
+suppressMessages(library(summarytools))
+suppressMessages(library(rpart))
+options(xtable.comment = FALSE)
+source(here::here("R", "utils_mimic.R"))
+source(here::here("R", "CombinedOnlineSL.R"))
+load(here::here("Data", "mimic_all.Rdata"))
+```
+
+# Overview of the Variable Importance Method
+
+## Statistical Problem Setup
+
+Let $O_t=(X_t,Y_t) \in \mathcal{0}$ be a random variable with distribution $P_0$, with $X_t \in \mathbb{R}^d$. We view $P_0$ as an element of the statistical model $\mathcal{M}$. In addition we let $O=(X,Y)$ denote all the time-points collected for one sample. The primary object of interest is given by
+$$Q_0(X_t,Y_t) = E_0(Y_{t+1}=1|\bar{X}_t,\bar{Y}_t),$$
+the (true) conditional expectation of $Y_{t+1}=1$ given the covariates $\bar{X}_t$ and $\bar{Y}_t$, under $P_0$. Here, $\bar{Y}_t$ and $\bar{X}_t$ denote all the past of the time-series up to time $t$. 
+
+Let $O_1, ... O_n$ denote $n$ independent and identically distributed samples drawn from $P_0$. We denote $P_n$ the empirical distribution of $O_1, ... O_n$.
+
+In addition, we define a learning algorithm $\hat{\Psi}$ for the estimation of $Q_0$ from $P_n$. Consequently, $\hat{\Psi}(P_n)$ is the output of the algorithm trained on all the observations available. Let $X_t^J$ denote the vector derived from $X_t$ by keeping only its component indexed by $j \in J$. Our main objective is to quantify to which extent a subset $X_t^J$ of $X_t$ contributes to the prediction of whether $Y_{t+1}=1$ or not relative to $\hat{\Psi}$. In particular, we define a data-adaptive, cross-validated statistical parameter that quantifies the influence of $X_t^J$ on the prediction of $Y_{t+1}$ relative to $\hat{\Psi}$. 
+
+## Loss and Risk Functions
+ 
+Let $L$ be a loss function for the estimation of $Q_0$, such that
+$$Q_0 = argmax_{Q \in \mathcal{Q}} E_0[L(Q)(O)].$$
+
+The loss function defines a risk $R_{P_0}^L$, given by
+$$R_{P_0}^L(Q) = E_{P_0}(L(Q)(O)).$$
+Similarly, we can define $R_{P_0}^L(\hat{\Psi}(P_n)) = E_{P_0}(L(\hat{\Psi}(P_n))(O))$ as the measure of quality of the prediction of $Q_0$ by $\hat{\Psi}(P_n)$. However, it is not easy to interpret the value of $R_{P_0}^L(\hat{\Psi}(P_n))$. Instead, similarly to the $R^2$-coefficient, we introduce a reference algorithm $\hat{\Psi}^{ref}$ and instead focus on the following quantity:
+$$1 - \frac{R_{P_0}^L(\hat{\Psi}(P_n))}{R_{P_0}^L(\hat{\Psi}^{ref}(P_n))} \leq 1.$$
+The above quantity equals 1 if and only if $R_{P_0}^L(\hat{\Psi}(P_n)) = 0$, in which case $\hat{\Psi}(P_n)$ coincides with $Q_0$. If it falls in the $(0,1)$ bin, then $\hat{\Psi}(P_n)$ is closer to $Q_0$ then $\hat{\Psi}^{ref}$. If negative, then $\hat{\Psi}^{ref}$ is closer to $Q_0$ than $\hat{\Psi}(P_n)$. 
+
+Continuing the parallel with the $R^2$-coefficient, we can characterize $\hat{\Psi}^{ref}$ as the empirical risk minimizer over the set of constant functions on $\mathcal{X}$. 
+
+## Data-adaptive, cross-validated Variable Importance Measure
+
+Let $B_n \in \{0,1\}$ be the cross-validation scheme such that $P_{n,B_n}^0$ is the empirical probability distribution of the training subsample and $P_{n,B_n}^1$ the empirical probability distribution of the validation subsample. We introduce the cross-validated counterpart to the risk $R_{P_0}^L$:
+$$R_{n,P_0}^L( \hat{\Psi} ) = E_{B_n} E_{P_0} [L(\hat{\Psi}_{B_n}(P_n^0))(O)]. $$
+Similarly, we define the cross-validated version of the augmented $R^2$:
+$$S_{n,P_0}^L(\hat{\Psi}) = 1 - \frac{R_{n,P_0}^L(\hat{\Psi}(P_n))}{R_{n,P_0}^L(\hat{\Psi}^{ref}(P_n))} \leq 1.$$
+With that, we define the target parameter which quantifies the influence of the subset $X^J$ of $X$ on the prediction of $Y$ relative to $\hat{\Psi}$. We denote $\hat{\Psi}^{/J}$ the algorithm that does not exploit the information conveyed by $X^J$. 
+
+The final target parameter is defined as:
+\begin{align}\label{tp}
+S_{n,P_0}^L(\hat{\Psi}) - S_{n,P_0}^L(\hat{\Psi}^{/J}) &= 
+1 - \frac{R_{n,P_0}^L(\hat{\Psi}(P_n))}{R_{n,P_0}^L(\hat{\Psi}^{ref}(P_n))} - (1 - \frac{R_{n,P_0}^L(\hat{\Psi}^{/J}(P_n))}{R_{n,P_0}^L(\hat{\Psi}^{ref}(P_n))}) \\
+&= \frac{R_{n,P_0}^L(\hat{\Psi}^{/j}(P_n)) - R_{n,P_0}^L(\hat{\Psi}(P_n))}{R_{n,P_0}^L(\hat{\Psi}^{ref}(P_n))}
+\end{align}
+
+## Inference
+
+The key to inference is the substitution of the validation empirical measure $P_{n, B_n}^1$ for
+$P_0$. We can derive an asymptotically linear estimator by deriving an EIF for our target parameter, 
+Eq. \ref{tp}. Note that the denominator is already efficient. Therefore, we need to derive the EIF 
+only for the numerator, which is a linear function of the means. It is important to note that this 
+EIF is loss specific. For the time being, we consider the MSE. 
+
+# Simple Simulation
+
+We simulate a simple AR=1 process, where the noise dependents on covariates $W3$ and $W4$. 
+
+```{r, simulate_fun_ts, echo=FALSE, eval=TRUE}
+##Parameters
+#N: number of independent time-series
+#n: number of time points for each time-series
+#mu: mean for the noise
+#sigma: sd for the noise
+
+sim_wt_ts <- function(N = 50, n = 1000, mu = rep(0,500), sigma = rep(1,500), W){
+  
+  wn <- matrix(ncol = N, nrow = n)
+  ar1 <- matrix(ncol=N, nrow=n)
+  ma1 <- matrix(ncol=N, nrow=n)
+  arma11 <- matrix(ncol=N,nrow=n)
+
+  for(i in 1:N){
+    wn[,i] <- ts(rnorm(n, mean = mu[i], sd = 2*sigma[i]))
+
+    # initialize the first value:
+    ar1[1,i] <- ma1[1,i] <- arma11[1,i] <- wn[1,i]
+
+    # loop through and create the 2:nth values:
+    for(j in 2:n){
+      ar1[j,i] <- ar1[j - 1,i]*0.8 + wn[j,i]
+      ma1[j,i] <- wn[j - 1,i]*0.8 + wn[j,i]
+      arma11[j,i] <- arma11[j - 1,i]*0.8 + wn[j - 1,i]*0.8 + wn[j,i]
+      }
+  }
+  
+  #Create the expected data-frame:
+  covs_tv<-melt(arma11)[2:3]
+  Ws<-do.call("rbind", replicate(N, W, simplify = FALSE))
+  data<-cbind.data.frame(subject_id=covs_tv[,1], Y=covs_tv[,2], Y_t1=lag(covs_tv[,2]), Ws)
+  
+  return(data)
+}
+```
+
+```{r, simulate_ts, echo=FALSE, eval=TRUE}
+set.seed(11)
+
+#Set parameters for the simulation
+N=50
+n=100
+W1 <- runif(n, min = -1, max = 1)
+W2 <- rbinom(n, prob = 0.2, size = 1)
+W3 <- rbinom(n, prob = 0.6, size = 1)
+W4 <- rnorm(n, 0.2, 0.05)
+
+#Simulate the data frame
+dat <- sim_wt_ts(N=N, n=n, mu = W3, sigma = W4, W=cbind(W1=W1,W2=W2,W3=W3,W4=W4))
+
+```
+
+```{r,ex_algo, echo=FALSE, eval=TRUE}
+#Define a simple algorithm:
+algo <- function(dat, method = c("tree","mean")) {
+  method <- match.arg(method)
+  dat <- as.data.frame(dat)
+  algo <- switch(method,
+                 mean = function(...) {
+                   glm(... )},
+                 tree = function(...) {
+                   rpart(... )})
+  fit <- algo(Y ~ ., data = dat)
+  Gbar <- switch(method,
+                 mean = function(newdata) {
+                   newdata <- as.data.frame(newdata)
+                   predict(fit, newdata, type = "response")},
+                 tree = function(newdata) {
+                   newdata <- as.data.frame(newdata)
+                   predict(fit, newdata)})
+  return(Gbar)
+}
+
+#Pointwise estimation of the measure of influence:
+compute_influence <- function(J, dat, algo,  ...) {
+  
+  if ("Y" %in% J) {
+    stop("Cannot include 'Y' in 'J'.\n")
+  }
+  if (length(setdiff(J, colnames(dat))) > 0) {
+    stop("Argument 'J' is not valid.\n")
+  }
+  
+  folds <- origami::make_folds(dat,
+                               fold_fun = folds_rolling_origin_pooled,
+                               t=100,
+                               first_window = 20,
+                               validation_size =10, gap = 0,
+                               batch = 20)
+  
+  R_n1 <- 0
+  R_n2 <- 0
+  R_n3 <- 0
+  
+  for (v in 1:length(folds)) {
+    
+    paste("Processing Fold", v)
+    
+    fold <- folds[[v]]
+    
+    ## learning
+    train <- training(dat)
+    ## output of 'algo' on full data
+    Gbar1 <- algo(train, method = "tree")
+    ## output of 'algo' deprived of X^J
+    Gbar2 <- algo(train[, setdiff(colnames(dat), c(J,"subject_id")) ],method = "tree")
+    ## output of reference algorithm
+    Gbar3 <- algo(train[, "Y", drop = FALSE], method = "mean")
+    
+    ## testing
+    test <- validation(dat)
+    
+    #This really manually evaluates the risk
+    R_n1 <- R_n1 + mean((test[, "Y"] - Gbar1(test))^2)
+    R_n2 <- R_n2 + mean((test[, "Y"] - Gbar2(test))^2) 
+    R_n3 <- R_n3 + mean((test[, "Y"] - Gbar3(test))^2) 
+  }
+  S_n1 <- 1 - R_n1 / R_n3
+  S_n2 <- 1 - R_n2 / R_n3
+  ## the following quantifies the influence of X^J
+  Delta_n <- S_n1 - S_n2 
+  return(c(Delta_n = Delta_n, S_n1 = S_n1, S_n2 = S_n2))
+}
+
+```
+
+```{r, eval_influence, echo=FALSE, eval=TRUE}
+influence_W1 <- compute_influence(J="W1", dat, algo, method = "tree")
+influence_W2 <- compute_influence(J="W2", dat, algo, method = "tree")
+influence_W3 <- compute_influence(J="W3", dat, algo, method = "tree")
+influence_W4 <- compute_influence(J="W4", dat, algo, method = "tree")
+influence_Y <- compute_influence(J="Y_t1", dat, algo, method = "tree")
+
+res<-rbind.data.frame(influence_W1,influence_W2,influence_W3,influence_W4,influence_Y)
+row.names(res)<-c("Influence of W1", "Influence of W2", "Influence of W3", "Influence of W4", "Influence of Y lagged")
+names(res)<-names(influence_Y)
+
+res %>%
+  kable(format = "latex", booktabs = T, digits = 3, longtable = T,
+        caption = "Variable Importance for Time-Series") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 10,
+                position = "center")
+```
+
+
+
+
+
+
+
