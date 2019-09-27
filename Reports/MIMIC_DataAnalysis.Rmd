@@ -281,7 +281,7 @@ calculations = function(res){
     return(x[,2:3])
     })
   weights<- data.frame(bind_cols(fit_coef))
-  toDelete <- seq(1, dim(weights)[2], 2)
+  toDelete <- seq(2, dim(weights)[2], 2)
   weights <-  weights[,-toDelete]
   weight<-data.frame(rowMeans(weights, na.rm = TRUE))
   names(weight)<-"Coefficient"
@@ -371,7 +371,7 @@ roc(calc_t360$truth$truth, calc_t360$pred_fin$pred, plot=TRUE, col="#377eb8", lw
 
 
 
-```{r, res_SL_origin, results='asis', echo=FALSE, eval=FALSE}
+```{r, res_SL_origin, results='asis', echo=FALSE, eval=TRUE}
 load(here("Results", "comSL_cvro.Rdata"))
 calc_t60<-calculations(comSL_cvro[[1]])
 calc_t120<-calculations(comSL_cvro[[2]])
