@@ -70,18 +70,51 @@ sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
 # we need at least gap + h time in test set, so we do not train on full 8 hrs
 # we need at least gap + test_size time in training set, so we do not include 
 # 30 min as a training time
-times <- seq(30, 420, by = 30)[-1]
+times <- seq(30, 420, by = 30)
 
-comSL_cvrw <- lapply(times, function(x){
-  combine_SL(train_all = dat, outcome, t = x, stack_pool = stack, 
+ptw <- proc.time()
+comSL_cvrw1 <- lapply(times[1:7], function(x){
+  combine_SL2(train_all = dat, outcome, t = x, stack_pool = stack, 
              stack_individual = stack, stack_screen = stack_screen, sl = sl,
              covars = covars_timevarying, covars_baseline = covars_baseline,
              cv = "folds_rolling_window", gap = 30, h = 15, 
              test_size = 15, mini_batch = 5, window_size = 15)
   })
-names(comSL_cvrw) <- paste0(times, " min training time")
-save(comSL_cvrw, file = here::here("Results", "comSL_cvrw.Rdata"), 
+names(comSL_cvrw1) <- paste0(times[1:7], " min training time")
+ptw - proc.time()
+save(comSL_cvrw1, file = here::here("Results", "comSL_cvrw1.Rdata"), 
      compress = TRUE)
+
+ptw <- proc.time()
+comSL_cvrw2 <- lapply(times[7:11], function(x){
+  combine_SL2(train_all = dat, outcome, t = x, stack_pool = stack, 
+              stack_individual = stack, stack_screen = stack_screen, sl = sl,
+              covars = covars_timevarying, covars_baseline = covars_baseline,
+              cv = "folds_rolling_window", gap = 30, h = 15, 
+              test_size = 15, mini_batch = 5, window_size = 15)})
+names(comSL_cvrw2) <- paste0(times[7:11], " min training time")
+save(comSL_cvrw2, file = here::here("Results", "comSL_cvrw2.Rdata"), 
+     compress = TRUE)
+comSL_cvrw3 <- lapply(times[12:14], function(x){
+  combine_SL2(train_all = dat, outcome, t = x, stack_pool = stack, 
+              stack_individual = stack, stack_screen = stack_screen, sl = sl,
+              covars = covars_timevarying, covars_baseline = covars_baseline,
+              cv = "folds_rolling_window", gap = 30, h = 15, 
+              test_size = 15, mini_batch = 5, window_size = 15)})
+names(comSL_cvrw3) <- paste0(times[12:14], " min training time")
+save(comSL_cvrw3, file = here::here("Results", "comSL_cvrw3.Rdata"), 
+     compress = TRUE)
+proc.time() - ptw
+comSL_cvro2 <- lapply(times[7:14], function(x){
+  combine_SL2(train_all = dat, outcome, t = x, stack_pool = stack, 
+              stack_individual = stack, stack_screen = stack_screen, sl = sl,
+              covars = covars_timevarying, covars_baseline = covars_baseline,
+              cv = "folds_rolling_origin", gap = 30, h = 15, 
+              test_size = 15, mini_batch = 5, window_size = 15)})
+names(comSL_cvro2) <- paste0(times, " min training time")
+save(comSL_cvro2, file = here::here("Results", "comSL_cvro2.Rdata"), 
+     compress = TRUE)
+proc.time() - ptw
 
 comSL_cvro <- lapply(times, function(x){
   combine_SL(train_all = dat, outcome, t = x, stack_pool = stack, 
