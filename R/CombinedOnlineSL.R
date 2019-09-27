@@ -321,7 +321,7 @@ combine_SL = function(train_all, outcome, t,
   get_weights = function(ps,y,l){
     
     #Gives a coefficient based on ALL the predictions (NOT time specific!)
-    fit_coef <- nnls::nnls(t(as.matrix(ps)), (y))
+    fit_coef <- nnls::nnls(t(as.matrix(ps)), as.matrix(y))
     fit_coef <- fit_coef$x
     
     if(sum(fit_coef)==0){
