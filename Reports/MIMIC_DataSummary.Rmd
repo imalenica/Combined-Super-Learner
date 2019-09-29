@@ -6,7 +6,7 @@ output:
   pdf_document:
     latex_engine: xelatex
     keep_tex: yes
-    number_sections: yes
+    number_sections: no
     toc: yes
     toc_depth: 2
   html_document:
@@ -19,6 +19,9 @@ header-includes:
 - \newcommand{\blandscape}{\begin{landscape}}
 - \newcommand{\elandscape}{\end{landscape}}
 - \usepackage{float}
+- \usepackage{booktabs}
+- \usepackage{caption}
+- \usepackage{capt-of}
 ---
 
 ```{r setup, echo = FALSE}
@@ -29,7 +32,8 @@ suppressMessages(library(tidyverse))
 suppressMessages(library(data.table))
 suppressMessages(library(dplyr))
 suppressMessages(library(kableExtra))
-suppressMessages(library(skimr))
+suppressMessages(library(knitr))
+suppressMessages(library(papeR))
 options(xtable.comment = FALSE)
 source(here::here("R", "utils_mimic.R"))
 load(here::here("Data", "mimic_all.Rdata"))
@@ -49,10 +53,14 @@ We can see a list of all the covariates available, as well as the basic summary
 statistic for each below. 
 
 \vspace{.2in}
-```{r, examine_data, echo=FALSE}
-#Filter data so there is no more that 3 minute gap between observations.
-#Subset data to samples that have at least 8 hours of data.
+```{r, examine_data, echo=FALSE, results = 'asis', warning=FALSE, message=FALSE}
+# Filter data so there is no more than 1 minute gap between observations.
+# Subset data to samples that have at least 8 hours of data.
 dat <- eval_missingness(min = 1, dataset = mimic_all, total_hrs = 8)[["dat"]] 
+# remove these two subjects with too many unlikely low systolic bp values
+ids_many_negative_abpsys <- c("15464", "4451")
+dat <- dat[!(dat$subject_id %in% ids_many_negative_abpsys),]
+
 dat_summary <- dat[,c("abpsys","abpdias","abpmean","spo2", 
                       "imputed_abpmean","imputed_abpsys_abpdias","hypo_event",
                       "amine","sedation","ventilation","rank_icu","gender",
@@ -60,14 +68,23 @@ dat_summary <- dat[,c("abpsys","abpdias","abpmean","spo2",
                       "admission_type_descr","imputed_age","imputed_bmi",
                       "imputed_sofa","imputed_sapsi")]
 names(dat_summary)
-
-#Summary of data:
-# print(dfSummary(dat_summary), method = "render", display.labels=FALSE, headings=TRUE,
-#       graph.col=TRUE, graph.magnif=0.8, silent=TRUE,
-#       report.title="Summary of all the covariates")
 ```
 
-\vspace{.2in}
+# Descriptive Statistics
+
+## Descriptive Statistics for Numeric Covariates
+```{r, examine_data_num, echo=FALSE, results = 'asis', warning=FALSE, message=FALSE}
+xtable(papeR::summarize(data.frame(dat_summary), type = "numeric"))
+```
+
+## Descriptive Statistics for Factor Covariates
+```{r, examine_data_fac, echo=FALSE, results = 'asis', warning=FALSE, message=FALSE}
+xtable(papeR::summarize(data.frame(dat_summary), type = "factor"))
+```
+
+\pagebreak
+
+# Hypotensive Episodes
 
 We further explore the number of total hypotensive episodes experiences per each 
 patient.
@@ -81,39 +98,33 @@ dat$hypo_event <- as.numeric(levels(dat$hypo_event))[dat$hypo_event]
 df <- dat %>%
   dplyr::select(c("subject_id", "hypo_event")) %>%
   dplyr::group_by(subject_id) %>%
-  dplyr::mutate(sum_all_events = sum(hypo_event)) %>%
-  dplyr::select(c("subject_id", "sum_all_events")) %>%
+  dplyr::mutate(sum_hypo_events = sum(hypo_event)) %>%
+  dplyr::select(c("subject_id", "sum_hypo_events")) %>%
   dplyr::group_by(subject_id) %>%
   dplyr::summarize_all(unique)
-
-#Summary of data:
-# print(dfSummary(df[,2]), method = "render", display.labels=FALSE, headings=TRUE,
-#       graph.col=TRUE, graph.magnif=0.8, silent=TRUE,
-#       report.title="Summary of the sum of hypotensive events by patient")
 ```
 
-Finally, we expore how many patients had at least one episode. 
-442 of the 698 subjects experienced at least one hypotensive event, and the 
+Next, we explore how many patients had at least one episode. 
+424 of the 680 subjects experienced at least one hypotensive event, and the 
 outcome function `Y1` was used to specify hypotensive events. By definition, 
 an hypotensive episode is defined as a 5 minute window with mean arterial 
 pressure (MAP) below 65 mmHg.
 
-```{r, examine_data_3, results='asis', echo=FALSE}
+```{r, examine_data_3, results='asis', echo=FALSE, warning=FALSE,message=FALSE}
 #Samples with events:
-sample_y1<-df[df$sum_all_events>0,1]
+sample_y1<-df[df$sum_hypo_events>0,1]
 #Samples with no events:
-sample_y0<-df[df$sum_all_events==0,1]
+sample_y0<-df[df$sum_hypo_events==0,1]
 
 event_summary <- rbind.data.frame(dim(sample_y1)[1],
                                   dim(sample_y0)[1])
-colnames(event_summary) <- "Number of Events"
-row.names(event_summary) <- c("Samples with > 0 episodes",
-                              "Samples with 0 episodes")
+colnames(event_summary) <- "Number of Samples"
+row.names(event_summary) <- c("> 0 hypotensive episodes",
+                              "0 hypotensive episodes")
 
-# print(dfSummary(event_summary), method = "render", display.labels=FALSE, headings=TRUE,
-#       graph.col=TRUE, graph.magnif=0.8, silent=TRUE,
-#       report.title="Summary of the sum of hypotensive events by patient")
+xtable(event_summary)
 ```
+
 
 # Data Used for the Combined Super Learner
 
@@ -137,14 +148,37 @@ covars_timevarying <- c("amine", "sedation", "ventilation", "spo2", "hr",
 Below we list covariates we use for the further analysis. In particular, we can 
 classify them as follows:
 
-1. Baseline Covariates
+* Baseline Covariates
 
 ```{r, baseline, echo=FALSE, eval=TRUE}
 covars_baseline
 ```
 
-1.Time-varying Covariates
+* Time-varying Covariates
 
 ```{r, timevar, echo=FALSE, eval=TRUE}
 covars_timevarying
 ```
+
+
+# Appendix
+
+### Number of Total Hypotensive Episodes for All Subjects Included in Analysis
+
+\small
+```{r, examine_data_4, results='asis', echo=FALSE,warning=FALSE,message=FALSE}
+df2 <- dat %>%
+  dplyr::select(c("subject_id","rank_icu","gender","age","sapsi_first",
+                  "sofa_first","bmi","care_unit","admission_type_descr")) %>%
+  dplyr::group_by(subject_id) %>%
+  summarise_each(funs(unique))
+
+new <- merge(df, df2, by = "subject_id")
+colnames(new) <- c("subject_id", "sum_hypo_event", "rank_icu", "sex", "age", 
+                   "sapsi_first", "sofa_first", "bmi", "care_unit",
+                   "admission_type")
+#Summary of data:
+kable(new, "latex", longtable = T, booktabs = T, digits = 2) %>% 
+  kable_styling(latex_options = c("repeat_header", "striped", "scale_down"))
+```
+
