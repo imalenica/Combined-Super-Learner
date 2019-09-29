@@ -36,7 +36,8 @@ global_SL = function(train_all, t, outcome,
                      sl, stack_pool, stack_screen=NULL, 
                      covars, covars_wbaseline,
                      test_size=5, mini_batch=5, V=NULL,
-                     cv="folds_rolling_origin", first_window=1, window_size=1){
+                     cv="folds_rolling_origin", first_window=1, window_size=1,
+                     gap = 0){
   
   #Pool across time (fitting on all data up to time t)
   #Here, we impose a Markov order assumption
@@ -48,14 +49,14 @@ global_SL = function(train_all, t, outcome,
                                  fold_fun = folds_rolling_origin_pooled,
                                  t=t,
                                  first_window = first_window,
-                                 validation_size = test_size, gap = 0,
+                                 validation_size = test_size, gap = gap,
                                  batch = mini_batch)
   }else if(cv=="folds_rolling_window"){
     folds <- origami::make_folds(test_data,
                                  fold_fun = folds_rolling_window_pooled,
                                  t=t,
                                  window_size = window_size,
-                                 validation_size = test_size, gap = 0,
+                                 validation_size = test_size, gap = gap,
                                  batch = mini_batch)
   }else if(cv=="folds_vfold"){
     folds <- origami::make_folds(test_data,
@@ -106,7 +107,8 @@ global_SL = function(train_all, t, outcome,
 individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
                          first_window=1, window_size=5,
                          test_size,mini_batch,
-                         covars_wbaseline,stack_individual){
+                         covars_wbaseline,stack_individual, 
+                         gap = 0){
   
   #Subset to sample with subject id id
   train_one <- train_all[train_all$subject_id %in% id,]
@@ -119,13 +121,13 @@ individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
     folds <- origami::make_folds(test_data,
                                  fold_fun = folds_rolling_origin,
                                  first_window = first_window,
-                                 validation_size = test_size, gap = 0,
+                                 validation_size = test_size, gap = gap,
                                  batch = mini_batch)
   }else if(cv=="folds_rolling_window"){
     folds <- origami::make_folds(test_data,
                                  fold_fun = folds_rolling_window,
                                  window_size = window_size,
-                                 validation_size = test_size, gap = 0,
+                                 validation_size = test_size, gap = gap,
                                  batch = mini_batch)
   }
 
@@ -185,7 +187,7 @@ combine_SL = function(train_all, outcome, t,
                       covars, covars_baseline,
                       id=NULL, cv="folds_rolling_origin",
                       gap=0, h=1, test_size=5, mini_batch=5,
-                      first_window=1, window_size=5){
+                      first_window=1, window_size=5, gap_training = 0){
   
   #Combine time-varying and baseline covariates
   covars_wbaseline <- c(covars, covars_baseline)
@@ -204,12 +206,14 @@ combine_SL = function(train_all, outcome, t,
                          sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
                          covars=covars, covars_wbaseline=covars_wbaseline,
                          test_size=test_size, mini_batch=mini_batch,
-                         cv=cv, first_window=first_window, window_size=window_size)
+                         cv=cv, first_window=first_window, window_size=window_size,
+                         gap = gap_training)
   global_SL_t_reg<-global_SL(train_all=train_all, t=t, outcome=outcome, 
                          sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
                          covars=covars, covars_wbaseline=covars_wbaseline,
                          test_size=test_size, mini_batch=mini_batch,
-                         cv="folds_vfold", V=10, first_window=first_window, window_size=window_size)
+                         cv="folds_vfold", V=10, first_window=first_window, 
+                         window_size=window_size)
   
   #Create individual SLs for all samples:
   individual_SL_t <- lapply(samples, function(x){individual_SL(train_all=train_all,t=t,id=x, cv=cv,
@@ -218,7 +222,8 @@ combine_SL = function(train_all, outcome, t,
                                                                test_size=test_size,
                                                                mini_batch=mini_batch,
                                                                covars_wbaseline=covars_wbaseline,
-                                                               stack_individual=stack_individual)})
+                                                               stack_individual=stack_individual,
+                                                               gap = gap_training)})
   
   # create the sl3 task:
   tasks <- lapply(samples, function(x){train_one <- train_all[train_all$subject_id %in% x,]
