@@ -25,8 +25,11 @@ sample_n_t = function(df,n,t){
 
 ### Create a new outcome
 
-## Solution 1
-
+## Solution 1 - hypotensive episode for time t is defined as either:
+# 1. abpmean at time t < 65 mmHg and there is 5-minute window around time t 
+#    (i.e., 10 time-points) with at least 5 time-points abpmean < 65.
+# 2. there is 5-minute window around time t (i.e., 10 time-points) where at 
+#    least 8 time-points abpmean < 65.
 new_Y_sol1 = function(train_all, window=5, cutoff=62){
 
   train_all$Y1<-rep(0,nrow(train_all))
@@ -42,7 +45,9 @@ new_Y_sol1 = function(train_all, window=5, cutoff=62){
     leads<-rowSums(as.data.frame(lapply(seq(1:window), function(x) lead(init,x))), na.rm = TRUE)
     mids<-lags+leads
 
-    event<-ifelse((init==1 & mids >= 5),1,0)
+    event<-ifelse((init==1 & mids >= 5),1,
+                  ifelse((init==0 & mids >= 8), 1,0))
+    
     #test<-cbind.data.frame(init,lags,leads,mids,event)
     train_all[train_all$subject_id==i,"Y1"]<-event
   }
