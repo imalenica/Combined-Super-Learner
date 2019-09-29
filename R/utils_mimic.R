@@ -180,3 +180,76 @@ eval_missingness <- function(min, dataset, total_hrs = 5) {
 }
 
 
+# fxn to summarize combine_SL fxn results
+calculations = function(res){
+  
+  #Get all predictions in a data-frame:
+  preds_fin<-as.data.frame(res$preds_fin)
+  preds_regSL<-as.data.frame(res$pred_regular_SL)
+  truth<-as.data.frame(res$truth)
+  names(preds_regSL)<-names(preds_fin)
+  names(truth)<-names(preds_fin)
+  
+  #preds_indSL<-as.data.frame(res$pred_regular_individual_SL)
+  #names(preds_indSL)<-names(preds_fin)
+  
+  #Get all predictions in a data-frame:
+  preds_fin<-as.data.frame(res$preds_fin)
+  preds_regSL<-as.data.frame(res$pred_regular_SL)
+  truth<-as.data.frame(res$truth)
+  names(preds_regSL)<-names(preds_fin)
+  names(truth)<-names(preds_fin)
+  
+  #preds_indSL<-as.data.frame(res$pred_regular_individual_SL)
+  #names(preds_indSL)<-names(preds_fin)
+  
+  #AUC over ALL validation time-points
+  pred_fin<-data.frame(pred=unlist(preds_fin))
+  pred_regSL<-data.frame(pred=unlist(preds_regSL))
+  truth<-data.frame(truth=unlist(truth))
+  #pred_indSL<-data.frame(pred=unlist(preds_indSL))
+  
+  #(averaged over time and all samples):
+  loss<-colMeans(res$losses_all)
+  names(loss)<-names(res$losses_all)
+  
+  #Look at the weights as an average over all samples:
+  fit_coef <- lapply(res$fit_coef, function(x){
+    rownames(x) <- x$learners
+    return(x[,2:3])
+  })
+  weights<- data.frame(bind_cols(fit_coef))
+  toDelete <- seq(2, dim(weights)[2], 2)
+  weights <-  weights[,-toDelete]
+  weight<-data.frame(rowMeans(weights, na.rm = TRUE))
+  names(weight)<-"Coefficient"
+  row.names(weight)<-res$fit_coef[[1]]$learners
+  weight<-weight/sum(weight)
+  #weight_lrn<-cbind.data.frame(Learner=res$fit_coef[[1]]$learners,Coefficients=weight)
+  #weight<-weight_lrn[order(weight, decreasing = TRUE),1:2]  
+  
+  #Make a more general category:
+  #1. picks the best algorithm from each category? 
+  #2. averages over the algorithms?
+  
+  weight$SL_type<-NA
+  weight[grepl("GlobalSL_screenbaseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen_Baseline"
+  weight[grepl("GlobalSL_baseline", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Baseline"
+  weight[grepl("GlobalSL_screen_", row.names(weight), fixed = TRUE),"SL_type"]<-"GlobalSL_Screen"
+  weight[grepl("IndividualSL_", row.names(weight), fixed = TRUE),"SL_type"]<-"IndividualSL"
+  weight[is.na(weight$SL_type),"SL_type"]<-"GlobalSL"
+  
+  #1. Best algorithm from each category
+  max_SL_type <- weight %>% group_by(SL_type) %>% summarise(max=max(Coefficient))
+  #2. Average of algorithms for each category
+  ave_SL_type <- weight %>% group_by(SL_type) %>% summarise(ave=mean(Coefficient))
+  
+  return(list(pred_fin=pred_fin,
+              pred_regSL=pred_regSL,
+              truth=truth,
+              loss=loss,
+              weight=weight,
+              max_SL_type=max_SL_type,
+              ave_SL_type=ave_SL_type))
+}
+
