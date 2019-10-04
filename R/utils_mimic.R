@@ -259,7 +259,7 @@ plot_coefvtime <- function(comSL_summary_list, weight_grouping = c("max", "ave")
   }
   
   row.names(avg_weight_all) <- names(comSL_summary_list)
-  colnames(avg_weight_all) <- t(calcs_times[[1]]$max_SL_type[1])
+  colnames(avg_weight_all) <- t(comSL_summary_list[[1]]$max_SL_type[1])
   avg_weight_all <- cbind.data.frame(Time = row.names(avg_weight_all),
                                      avg_weight_all)
   avg_weight_all <- melt(avg_weight_all, id = "Time")
