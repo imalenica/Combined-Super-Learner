@@ -200,7 +200,9 @@ calculations <- function(res){
   
   # averaged over time and all samples
   avg_loss <- colMeans(res$losses_all)
-  names(avg_loss) <- names(res$losses_all)
+  names(avg_loss) <- c("loss_combined_SL", 
+                       "loss_regular_SL", 
+                       "loss_individual_SL")
   
   # look at the weights as an average over all samples:
   fit_coef <- lapply(res$fit_coef, function(x){
@@ -213,31 +215,77 @@ calculations <- function(res){
   weight <- data.frame(rowMeans(weights, na.rm = TRUE))
   names(weight) <- "Coefficient"
   row.names(weight) <- res$fit_coef[[1]]$learners
-  weight <- weight/sum(weight)
+  avg_weight <- weight/sum(weight)
   #weight_lrn<-cbind.data.frame(Learner=res$fit_coef[[1]]$learners,Coefficients=weight)
   #weight<-weight_lrn[order(weight, decreasing = TRUE),1:2]  
   
   # make a more general category:
   #1. picks the best algorithm from each category? 
   #2. averages over the algorithms?
-  weight$SL_type <- NA
-  weight[grepl("GlobalSL_screenbaseline", row.names(weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Screen_Baseline"
-  weight[grepl("GlobalSL_baseline", row.names(weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Baseline"
-  weight[grepl("GlobalSL_screen_", row.names(weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Screen"
-  weight[grepl("IndividualSL_", row.names(weight), fixed = TRUE),"SL_type"] <- "IndividualSL"
-  weight[is.na(weight$SL_type),"SL_type"] <- "GlobalSL"
+  avg_weight$SL_type <- NA
+  avg_weight[grepl("GlobalSL_screenbaseline", row.names(avg_weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Screen_Baseline"
+  avg_weight[grepl("GlobalSL_baseline", row.names(avg_weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Baseline"
+  avg_weight[grepl("GlobalSL_screen_", row.names(avg_weight), fixed = TRUE),"SL_type"] <- "GlobalSL_Screen"
+  avg_weight[grepl("IndividualSL_", row.names(avg_weight), fixed = TRUE),"SL_type"] <- "IndividualSL"
+  avg_weight[is.na(avg_weight$SL_type),"SL_type"] <- "GlobalSL"
   
   #1. Best algorithm from each category
-  max_SL_type <- weight %>% 
+  max_SL_type <- avg_weight %>% 
                  dplyr::group_by(SL_type) %>% 
                  dplyr::summarise(max=max(Coefficient))
   #2. Average of algorithms for each category
-  ave_SL_type <- weight %>% 
+  ave_SL_type <- avg_weight %>% 
                  dplyr::group_by(SL_type) %>% 
                  dplyr::summarise(ave=mean(Coefficient))
   
-  return(list(pred_fin = pred_fin, pred_regSL = pred_regSL, truth = truth,
-              loss = loss, weight = weight, max_SL_type = max_SL_type,
-              ave_SL_type = ave_SL_type))
+  comSL_summary <- list(pred_fin = pred_fin, pred_regSL = pred_regSL, 
+                        truth = truth, avg_loss = avg_loss, 
+                        avg_weight = avg_weight, max_SL_type = max_SL_type,
+                        ave_SL_type = ave_SL_type)
+  return(comSL_summary)
 }
 
+plot_coefvtime <- function(comSL_summary_list, weight_grouping = c("max", "ave"), 
+                           cv_type){
+  if(weight_grouping == "max"){
+    avg_weight_all <- t(cbind.data.frame(lapply(comSL_summary_list, function(z){
+      z$max_SL_type[2]})))
+    SL_types <- t(comSL_summary_list[[1]]$max_SL_type[1])
+  }
+  if(weight_grouping == "ave"){
+    avg_weight_all <- t(cbind.data.frame(lapply(comSL_summary_list, function(z){
+      z$ave_SL_type[2]})))
+    SL_types <- t(comSL_summary_list[[1]]$ave_SL_type[1])
+  }
+  
+  row.names(avg_weight_all) <- names(comSL_summary_list)
+  colnames(avg_weight_all) <- t(calcs_times[[1]]$max_SL_type[1])
+  avg_weight_all <- cbind.data.frame(Time = row.names(avg_weight_all),
+                                     avg_weight_all)
+  avg_weight_all <- melt(avg_weight_all, id = "Time")
+  avg_weight_all$Time <- as.numeric(levels(avg_weight_all$Time))[avg_weight_all$Time]
+  obj <- ggplot(avg_weight_all, aes(x = Time, y = value, colour = variable)) +
+    geom_line(aes(group = variable), size = 0.4) + 
+    geom_point(shape = 1) + 
+    ggtitle(paste0("SL Weights over Time for ", cv_type, " CV")) +
+    labs(x = "Training Time (Minutes)", 
+         y = "Average SL Coefficient",
+         color = "SL Type") 
+  return(obj)
+}
+  
+calculate_AUCs <- function(comSL_summary_list, cv_type){
+  
+  truths <- lapply(comSL_summary_list, function(z) z$truth$truth)
+  preds <- lapply(comSL_summary_list, function(z) z$pred_fin$pred)
+  
+  AUCs <- list()
+  for(i in 1:length(comSL_summary_list)){
+    roc_obj <- roc(truths[[i]], preds[[i]], ci = TRUE)
+    AUCs[[i]] <- as.numeric(ci.auc(auc(roc_obj)))[2]
+  }
+  names(AUCs) <- names(comSL_summary_list)
+  AUCs_df <- data.frame(unlist(AUCs))
+  colnames(AUCs_df) <- "AUC"
+  return(AUCs_df)
+}
