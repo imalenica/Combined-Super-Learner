@@ -315,6 +315,55 @@ save(comSL_cvro_test_size,
      file = here("Results", "comSL_cvro_test_size.Rdata"), compress = TRUE)
 
 
+cvro_1 <- combine_SL(train_all = dat, outcome, t = 30, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_origin", gap = 30, h = 1, test_size = 1, 
+               mini_batch = 5, window_size = 1)
+save(cvro_1, file = here("Results", "comSL_cvro_1.Rdata"), compress = TRUE)
+cvrw_1 <- combine_SL(train_all = dat, outcome, t = 30, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_window", gap = 30, h = 1, test_size = 1, 
+               mini_batch = 5, window_size = 1)
+save(cvrw_1, file = here("Results", "comSL_cvrw_1.Rdata"), compress = TRUE)
+
+# examine results
+load(here("Results", "comSL_cvro_1.Rdata"))
+load(here("Results", "comSL_cvrw_1.Rdata"))
+pred_cvro_1 <- as.numeric(unlist(cvro_1$preds_fin))
+pred_cvrw_1 <- as.numeric(unlist(cvrw_1$preds_fin))
+all(pred_cvrw_1 == pred_cvro_1) # TRUE
+
+# subset to samples with hypotensive events:
+df <- dat %>%
+  dplyr::select(c("subject_id", "hypo_event")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::mutate(sum_hypo_events = sum(hypo_event)) %>%
+  dplyr::select(c("subject_id", "sum_hypo_events")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize_all(unique)
+ids_hypo <- as.character((df[df$sum_hypo_events > 0, 1])$subject_id)
+dat$subject_id <- as.character(dat$subject_id)
+hypo_dat <- dat[dat$subject_id %in% ids_hypo, ]
+comSL_cvro_1_hypo <- combine_SL(train_all = hypo_dat, outcome, t = 30, 
+                                stack_pool = stack, stack_individual = stack,
+                                stack_screen = stack_screen, sl = sl,
+                                covars = covars_timevarying, 
+                                covars_baseline = covars_baseline,
+                                cv="folds_rolling_origin", gap = 30, h = 1, 
+                                test_size = 1, mini_batch = 5, window_size = 1)
+save(comSL_cvro_1_hypo, file = here("Results", "comSL_cvro_1_hypo.Rdata"), compress = TRUE)
+comSL_cvrw_1_hypo <- combine_SL(train_all = hypo_dat, outcome, t = 30, 
+                                stack_pool = stack, stack_individual = stack,
+                                stack_screen = stack_screen, sl = sl,
+                                covars = covars_timevarying, 
+                                covars_baseline = covars_baseline,
+                                cv="folds_rolling_window", gap = 30, h = 1, 
+                                test_size = 1, mini_batch = 5, window_size = 1)
+save(comSL_cvrw_1_hypo, file = here("Results", "comSL_cvrw_1_hypo.Rdata"), 
+     compress = TRUE)
+
 # when I added n_rounds = c(20,50) to grid_params total time was:
 #  user     system    elapsed
 # 320156.235   3894.858  44141.779
@@ -350,7 +399,7 @@ load(here("Results", "comSL_cvro.Rdata"))
 load(here("Results", "comSL_cvro_gap_training.Rdata"))
 load(here("Results", "comSL_cvrw_gap_training.Rdata"))
 load(here("Results", "comSL_cvro_test_size.Rdata"))
-
+  
 get_calculations <- function(list_gaps_times, 
                              cv_type = c("Rolling Origin", "Rolling Window")){
   calcs_gaps <- lapply(list_gaps_times, function(x){
@@ -381,12 +430,12 @@ get_calculations <- function(list_gaps_times,
   AUC_plot <- ggplot(AUC_melt, aes(x = Time, y = value, colour = variable)) +
     geom_line(aes(group = variable), size = 0.4) + 
     geom_point(shape = 1) + 
-    ggtitle(paste0("AUCs over Time and across Various Gaps 
+    ggtitle(paste0("AUCs over Time and across Various Test Sizes 
                    Between Last Training Time-Point and First Prediction Time-Point 
                    for ",cv_type, " CV")) +
     labs(x = "Training Time (Minutes)", 
          y = "AUC",
-         color = "Gap (Minutes)")
+         color = "Test Size (Minutes)")
   
   # remove nested list structure from other objects
   avg_losses <- lapply(calcs_gaps, '[[', "avg_loss_all")
@@ -401,6 +450,12 @@ get_calculations <- function(list_gaps_times,
 
 calcs_cvro <- get_calculations(comSL_cvro, cv_type = "Rolling Origin")
 calcs_cvrw <- get_calculations(comSL_cvrw, cv_type = "Rolling Window")
+calcs_cvro_gap_training <- get_calculations(comSL_cvro_gap_training, 
+                                            cv_type = "Rolling Origin")
+calcs_cvrw_gap_training <- get_calculations(comSL_cvrw_gap_training, 
+                                            cv_type = "Rolling Window")
+calcs_cvro_test_size <- get_calculations(comSL_cvro_test_size, 
+                                         cv_type = "Rolling Origin")
 ```
 
 ## AUC 
