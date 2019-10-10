@@ -36,18 +36,13 @@ suppressMessages(library(SuperLearner))
 suppressMessages(library(dplyr))
 suppressMessages(library(kableExtra))
 suppressMessages(library(pROC))
-suppressMessages(library(knitr))
+
 options(xtable.comment = FALSE)
+
 source(here::here("R", "utils_mimic.R"))
 source(here::here("R", "CombinedOnlineSL.R"))
 load(here::here("Data", "mimic_all.Rdata"))
-
-st_options(plain.ascii = FALSE,
-           style       = "rmarkdown",
-           footnote    = NA)
 ```
-
-# Overview {-}
 
 # Overview of the Data
 
@@ -97,7 +92,7 @@ event_summary <- rbind.data.frame(dim(sample_y1)[1],
 colnames(event_summary) <- "Number of Samples"
 row.names(event_summary) <- c("> 0 hypotensive episodes",
                               "0 hypotensive episodes")
-xtable(event_summary)
+event_summary
 ```
 
 # Prepare Data for the Analysis
@@ -123,13 +118,13 @@ covars_timevarying <- c("amine", "sedation", "ventilation", "spo2", "hr",
 Below we list covariates we use for the further analysis. In particular, we can 
 classify them as follows:
 
-1. Baseline Covariates
+* Baseline Covariates
 
 ```{r, baseline, echo=FALSE, eval=TRUE}
 covars_baseline
 ```
 
-1.Time-varying Covariates
+* Time-varying Covariates
 
 ```{r, timevar, echo=FALSE, eval=TRUE}
 covars_timevarying
@@ -143,6 +138,8 @@ incorporate the above described covariates as well. In addition, we consider two
 different Cross-Validation schemes that are used to *train* the combined super 
 learner:
 
+\vspace{.2in}
+
 * Rolling Origin:
   * initial training set size 15 minutes
   * test set size 15 minutes
@@ -152,6 +149,8 @@ learner:
   20-35, and the third fold trains on minutes 1-25 and tests on minutes 
   25-40.
   
+\vspace{.2in}
+
 * Rolling Window:  
   * each window size is 15 minutes
   * test set size 15 minutes 
@@ -165,17 +164,22 @@ Note that the test sets described in the two cross-validation schemes are used
 to train the pooled/global and individual SLs. These test sets are not used to 
 construct the weights for the combined SL.
   
+\vspace{.2in}
+
 To *construct* the combined super learner (i.e., combine the weights from the
 pooled SL and individual SL), we incorporate a gap of 30 minutes between the 
 last trained time point and the first prediction time point. Also, the
 prediction period is the first 15-minutes following the 30-minute gap between
 the training data. 
 
+\vspace{.2in}
+
 As explored in previous simulations, we only consider the binary outcome, 
 instead of the continuous (even though the combined SL has support for both).
   
 For the base learning library, we consider variations of xgboost: 
 
+\vspace{.2in}
 ```{r, prep_SL, results='asis', echo=FALSE, eval=TRUE}
 grid_params = list(max_depth = c(2,4,6,8),
                    eta = c(0.001, 0.01, 0.1, 0.2, 0.3))
@@ -195,11 +199,30 @@ sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
 
 stack
 ```
+\vspace{.2in}
+
+\pagebreak
+
+On the previous page, we mentioned that we consider a 30-minute time gap between
+the last trained time point and the first prediction time point. For evaluation 
+purposes, we consider the following gaps of time (in minutes) between the last 
+trained time point and the first prediction time point:
+
+```{r, gaps, results='asis', echo=FALSE, eval=TRUE}
+gaps <- seq(15,45,5)
+gaps
+```
+
+\vspace{.2in}
+
+We also consider the following training times: 
+
+```{r, times, results='asis', echo=FALSE, eval=TRUE}
+times <- seq(30, 420, 30)
+times
+```
 
 ```{r, run_SL, results='asis', echo=FALSE, eval=FALSE}
-times <- seq(30, 420, 30)
-gaps <- seq(15,45,5)
-
 ptm <- proc.time()
 comSL_cvrw <- lapply(gaps, function(x){
   SL_times <- mclapply(times, function(y){
@@ -216,9 +239,9 @@ names(comSL_cvrw) <- paste0(gaps)
 proc.time() - ptm
 save(comSL_cvrw, file = here("Results", "comSL_cvrw.Rdata"), compress = TRUE)
 #       user     system    elapsed
-# 230306.839   3460.473  24239.548
-# 24239.548/60/60/7 ~ 1 hrs to run combine_SL across the times sequence
-# 24239.548/60/60 = 6.7 hrs to run combine_SL across the times & gaps sequences
+# 224718.691   4693.963  23720.388
+# 23720.388/60/60/7 ~ 1 hrs to run combine_SL across the times sequence
+# 23720.388/60/60 = 6.5 hrs to run combine_SL across the times & gaps sequences
 
 ptm <- proc.time()
 comSL_cvro <- lapply(gaps, function(x){
@@ -273,6 +296,24 @@ proc.time() - ptm
 save(comSL_cvro_gap_training, 
      file = here("Results", "comSL_cvro_gap_training.Rdata"), compress = TRUE)
 
+test_size <- seq(10, 60, 10)
+ptm <- proc.time()
+comSL_cvro_test_size <- lapply(test_size, function(x){
+  SL_times <- mclapply(times[3:13], function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_origin", gap = 30, h = x, test_size = x, 
+               mini_batch = 5, window_size = 15)
+   }, mc.cores = 20)
+  names(SL_times) <- paste0(times[3:13])
+  return(SL_times)
+  })
+names(comSL_cvro_test_size) <- paste0(test_size)
+proc.time() - ptm
+save(comSL_cvro_test_size, 
+     file = here("Results", "comSL_cvro_test_size.Rdata"), compress = TRUE)
+
 
 # when I added n_rounds = c(20,50) to grid_params total time was:
 #  user     system    elapsed
@@ -300,142 +341,139 @@ save(comSL_cvro_gap_training,
 #   dplyr::summarize(sum(coefs)) 
 ```
 
-# Examine Results for Combined Super Learner
+# Evaluate Performance for Combined Super Learner
 
-```{r, res_SL, results='asis', echo=FALSE, eval=TRUE}
+```{r, res_SL, results='asis', echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
 
 load(here("Results", "comSL_cvrw.Rdata"))
 load(here("Results", "comSL_cvro.Rdata"))
+load(here("Results", "comSL_cvro_gap_training.Rdata"))
+load(here("Results", "comSL_cvrw_gap_training.Rdata"))
+load(here("Results", "comSL_cvro_test_size.Rdata"))
 
-get_calculations <- function(list_gaps_times){
+get_calculations <- function(list_gaps_times, 
+                             cv_type = c("Rolling Origin", "Rolling Window")){
   calcs_gaps <- lapply(list_gaps_times, function(x){
-    calcs_times <- lapply(x, function(y){
+    comSL_summary_list <- lapply(x, function(y){
       calculations(y)
-    })
-    names(calcs_times) <- names(x)
+      })
+    names(comSL_summary_list) <- names(x)
     
-    avg_loss_all <- t(cbind.data.frame(lapply(calcs_times, '[[', avg_loss)))
+    avg_loss_all <- t(cbind.data.frame(
+      lapply(comSL_summary_list, function(z) z$avg_loss)))
     
-    avg_weight_all_max <- t(cbind.data.frame(lapply(calcs_times, function(z){
-      z$max_SL_type[2]
-    })))
-    row.names(avg_weight_all_max) <- names(calcs_times)
-    colnames(avg_weight_all_max) <- t(calcs_times[[1]]$max_SL_type[1])
-    avg_weight_all_max <- cbind.data.frame(Time = row.names(avg_weight_all_max),
-                                           avg_weight_all_max)
-    avg_weight_all_max <- melt(avg_weight_all_max, id = "Time")
-    avg_weight_all_max$Time <-
-      as.numeric(levels(avg_weight_all_max$Time))[avg_weight_all_max$Time]
+    plot_max <- plot_coefvtime(comSL_summary_list, "max", cv_type) 
+    plot_ave <- plot_coefvtime(comSL_summary_list, "ave", cv_type)
+    AUCs <- calculate_AUCs(comSL_summary_list)
     
-    avg_weight_all_ave <- t(cbind.data.frame(lapply(calcs_times, function(z){
-      z$ave_SL_type[2]
-    })))
-    row.names(avg_weight_all_ave) <- names(calcs_times)
-    colnames(avg_weight_all_ave) <- t(calcs_times[[1]]$ave_SL_type[1])
-    avg_weight_all_ave <- cbind.data.frame(Time = row.names(avg_weight_all_ave),
-                                           avg_weight_all_ave)
-    avg_weight_all_ave <- melt(avg_weight_all_ave, id = "Time")
-    avg_weight_all_ave$Time <-
-      as.numeric(levels(avg_weight_all_ave$Time))[avg_weight_all_ave$Time]
-    
-    truths <- lapply(calcs_times, function(z){
-      z$truth$truth
-    })
-    
-    preds <- lapply(calcs_times, function(z){
-      z$pred_fin$pred
-    })
-    
-    all_results <- list(calcs_times = calcs_times, 
-                        avg_loss_all = avg_loss_all, 
-                        avg_weight_all_max = avg_weight_all_max,
-                        avg_weight_all_ave = avg_weight_all_ave,
-                        truths = truths,
-                        preds = preds)
+    all_results <- list(avg_loss_all = avg_loss_all, plot_max = plot_max,
+                        plot_ave = plot_ave, AUCs = AUCs)
     return(all_results)
     })
   names(calcs_gaps) <- names(list_gaps_times)
-  return(calcs_gaps)
+  
+  # plot the AUCs across time and categorized by the various gap times
+  AUCs <- cbind.data.frame(lapply(calcs_gaps, '[[', "AUCs"))
+  colnames(AUCs) <- names(list_gaps_times)
+  AUCs <- cbind.data.frame(Time = row.names(AUCs), AUCs)
+  AUC_melt <- melt(AUCs, id = "Time")
+  AUC_melt$Time <- as.numeric(levels(AUC_melt$Time))[AUC_melt$Time]
+  AUC_plot <- ggplot(AUC_melt, aes(x = Time, y = value, colour = variable)) +
+    geom_line(aes(group = variable), size = 0.4) + 
+    geom_point(shape = 1) + 
+    ggtitle(paste0("AUCs over Time and across Various Gaps 
+                   Between Last Training Time-Point and First Prediction Time-Point 
+                   for ",cv_type, " CV")) +
+    labs(x = "Training Time (Minutes)", 
+         y = "AUC",
+         color = "Gap (Minutes)")
+  
+  # remove nested list structure from other objects
+  avg_losses <- lapply(calcs_gaps, '[[', "avg_loss_all")
+  plots_max <- lapply(calcs_gaps, '[[', "plot_max")
+  plots_ave <- lapply(calcs_gaps, '[[', "plot_ave")
+  
+  return(list(AUC_plot = AUC_plot,
+              avg_losses = avg_losses,
+              plots_max = plots_max, 
+              plots_ave = plots_ave))
 }
 
-calcs_cvro <- get_calculations(comSL_cvro)
-
-# ggplot(weight_all_max, aes(x=Time,y=value,colour=variable)) + geom_line(aes(group=variable),size=0.4) + geom_point(shape=1) + ggtitle("Super Learner Weights over time for Rolling Window CV") + labs(x="time point (minutes)", y="Super Learner Coefficient", sep=" ")
-
-ggplot(weight_all_ave, aes(x=Time,y=value,colour=variable)) + geom_line(aes(group=variable),size=0.4) + geom_point(shape=1) + ggtitle("Super Learner Weights over varying Training Time for Rolling Window CV") + labs(x="Training time (minutes)", y="Super Learner Coefficient", sep=" ") + theme_bw()
-
-print(xtable(data.frame(loss_all_t), caption='\\textbf{Risk for all different SLs considered for Rolling Window CV}', digits=10), include.rownames=TRUE,caption.placement = "top", size="\\fontsize{9pt}{10pt}\\selectfont")
+calcs_cvro <- get_calculations(comSL_cvro, cv_type = "Rolling Origin")
+calcs_cvrw <- get_calculations(comSL_cvrw, cv_type = "Rolling Window")
 ```
 
-```{r, roc_SL, results='asis', echo=FALSE, eval = FALSE}
-roc(calc_t60$truth$truth, calc_t60$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=60")
+## AUC 
 
-roc(calc_t120$truth$truth, calc_t120$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=120")
-
-roc(calc_t180$truth$truth, calc_t180$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=180")
-
-roc(calc_t240$truth$truth, calc_t240$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=240")
-
-roc(calc_t300$truth$truth, calc_t300$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=300")
-
-roc(calc_t360$truth$truth, calc_t360$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=360")
+```{r, roc_SL, echo = FALSE, eval = TRUE}
+knitr::include_graphics(here("Results", "AUC_cvro.pdf"))
+knitr::include_graphics(here("Results", "AUC_cvrw.pdf"))
 ```
 
+\pagebreak
 
+## Super Learner Coefficients
 
-```{r, res_SL_origin, results='asis', echo=FALSE, eval=TRUE}
-load(here("Results", "comSL_cvro.Rdata"))
-calc_t60<-calculations(comSL_cvro[[1]])
-calc_t120<-calculations(comSL_cvro[[2]])
-calc_t180<-calculations(comSL_cvro[[3]])
-calc_t240<-calculations(comSL_cvro[[4]])
-calc_t300<-calculations(comSL_cvro[[5]])
-calc_t360<-calculations(comSL_cvro[[6]])
-calc_t420<-calculations(comSL_cvro[[7]])
+### 15-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
 
-loss_all_t<-t(cbind.data.frame(calc_t60$loss,calc_t120$loss,calc_t180$loss,
-                               calc_t240$loss,calc_t300$loss, calc_t360$loss,
-                               calc_t420$loss))
-row.names(loss_all_t)<-c("t=60","t=120","t=180","t=240","t=300","t=360","t=420")
-
-weight_all_max<-t(cbind.data.frame(calc_t60$max_SL_type[2],calc_t120$max_SL_type[2],
-                                   calc_t180$max_SL_type[2],calc_t240$max_SL_type[2],
-                                   calc_t300$max_SL_type[2],calc_t360$max_SL_type[2],
-                                   calc_t420$max_SL_type[2]))
-row.names(weight_all_max)<-c("60","120","180","240","300","360","420")
-colnames(weight_all_max)<-t(calc_t60$max_SL_type[1])
-weight_all_max<-cbind.data.frame(Time=row.names(weight_all_max),weight_all_max)
-weight_all_max<-melt(weight_all_max, id="Time")
-weight_all_max$Time<-as.numeric(levels(weight_all_max$Time))[weight_all_max$Time]
-
-# ggplot(weight_all_max, aes(x=Time,y=value,colour=variable)) + geom_line(aes(group=variable),size=0.4) + geom_point(shape=1) + ggtitle("Super Learner Weights over time for Rolling Origin CV") + labs(x="time point (minutes)", y="Super Learner Coefficient", sep=" ")
-
-weight_all_ave<-t(cbind.data.frame(calc_t60$ave_SL_type[2],calc_t120$ave_SL_type[2],
-                                   calc_t180$ave_SL_type[2],calc_t240$ave_SL_type[2],
-                                   calc_t300$ave_SL_type[2],calc_t360$ave_SL_type[2],
-                                   calc_t420$ave_SL_type[2]))
-row.names(weight_all_ave)<-c("60","120","180","240","300","360","420")
-colnames(weight_all_ave)<-t(calc_t60$ave_SL_type[1])
-weight_all_ave<-cbind.data.frame(Time=row.names(weight_all_ave),weight_all_ave)
-weight_all_ave<-melt(weight_all_ave, id="Time")
-weight_all_ave$Time<-as.numeric(levels(weight_all_ave$Time))[weight_all_ave$Time]
-
-ggplot(weight_all_ave, aes(x=Time,y=value,colour=variable)) + geom_line(aes(group=variable),size=0.4) + geom_point(shape=1) + ggtitle("Super Learner Weights over varying Training Time for Rolling Origin CV") + labs(x="Training time (minutes)", y="Super Learner Coefficient", sep=" ") + theme_bw()
-
-print(xtable(data.frame(loss_all_t), caption='\\textbf{Risk for all different SLs considered for Rolling Origin CV}', digits=10), include.rownames=TRUE,caption.placement = "top", size="\\fontsize{9pt}{10pt}\\selectfont")
+```{r, coef_SL15, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[1]]
+calcs_cvrw[["plots_ave"]][[1]]
 ```
 
+### 20-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
 
-```{r, roc_SL_origin, results='asis', echo=FALSE, eval=TRUE, eval = FALSE}
-roc(calc_t60$truth$truth, calc_t60$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=60")
+```{r, coef_SL20, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[2]]
+calcs_cvrw[["plots_ave"]][[2]]
+```
 
-roc(calc_t120$truth$truth, calc_t120$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=120")
+### 25-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
 
-roc(calc_t180$truth$truth, calc_t180$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=180")
+```{r, coef_SL25, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[3]]
+calcs_cvrw[["plots_ave"]][[3]]
+```
 
-roc(calc_t240$truth$truth, calc_t240$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=240")
+### 30-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
 
-roc(calc_t300$truth$truth, calc_t300$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=300")
+```{r, coef_SL30, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[4]]
+calcs_cvrw[["plots_ave"]][[4]]
+```
 
-roc(calc_t360$truth$truth, calc_t360$pred_fin$pred, plot=TRUE, col="#377eb8", lwd=4, print.auc=TRUE, main="Combined Online Super Learner for t=360")
+### 35-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL35, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[5]]
+calcs_cvrw[["plots_ave"]][[5]]
+```
+
+### 40-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL40, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[6]]
+calcs_cvrw[["plots_ave"]][[6]]
+```
+
+### 45-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL45, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[7]]
+calcs_cvrw[["plots_ave"]][[7]]
+```
+
+## Loss for the Super Learner
+
+\tiny
+```{r, loss_SL, echo=FALSE, eval=TRUE}
+calcs_cvro[["avg_losses"]]
+calcs_cvrw[["avg_losses"]]
 ```
