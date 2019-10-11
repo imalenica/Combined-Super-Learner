@@ -364,30 +364,13 @@ comSL_cvrw_1_hypo <- combine_SL(train_all = hypo_dat, outcome, t = 30,
 save(comSL_cvrw_1_hypo, file = here("Results", "comSL_cvrw_1_hypo.Rdata"), 
      compress = TRUE)
 
-# when I added n_rounds = c(20,50) to grid_params total time was:
-#  user     system    elapsed
-# 320156.235   3894.858  44141.779
-# 44141.779/60/60/7 = 1.75 hrs to run combine_SL across the times sequence
-# 44141.779/60/60 ~ 12 hrs to run combine_SL across the times & gaps sequences
-#save(comSL_cvrw, file = here::here("Results", "comSL_cvrw_12hr.Rdata"), 
-#     compress = TRUE)
-# nonzero <- lapply(comSL_cvrw, function(x){
-#   lapply(x, function(y){
-#     dat <- y$fit_coef
-#     dplyr::filter(data.frame(dat), coefs > 0)
-#   })})
-# tbl <- lapply(nonzero, function(x){
-#   bind_rows(x)
-# })
-# all <- bind_rows(tbl)
-# levs_by_id <- all %>%
-#   dplyr::select(c("learners")) %>%
-#   dplyr::group_by(learners) %>%
-#   tally()
-# arrange(levs_by_id, desc(n))
-# sum_by_id <- all %>%
-#   dplyr::group_by(learners) %>%
-#   dplyr::summarize(sum(coefs)) 
+# examine results
+load(here("Results", "comSL_cvro_1_hypo.Rdata"))
+load(here("Results", "comSL_cvrw_1_hypo.Rdata"))
+pred_cvro_1_hypo <- as.numeric(unlist(comSL_cvro_1_hypo$preds_fin))
+pred_cvrw_1_hypo <- as.numeric(unlist(comSL_cvrw_1_hypo$preds_fin))
+all(pred_cvrw_1_hypo == pred_cvro_1_hypo) # TRUE
+
 ```
 
 # Evaluate Performance for Combined Super Learner
@@ -463,6 +446,7 @@ calcs_cvro_test_size <- get_calculations(comSL_cvro_test_size,
 ```{r, roc_SL, echo = FALSE, eval = TRUE}
 knitr::include_graphics(here("Results", "AUC_cvro.pdf"))
 knitr::include_graphics(here("Results", "AUC_cvrw.pdf"))
+knitr::include_graphics(here("Results", "AUC_cvro_test_size.pdf"))
 ```
 
 \pagebreak
