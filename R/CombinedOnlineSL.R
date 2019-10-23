@@ -33,7 +33,7 @@ eval_loss_cont <- function(ps, y){
 #####################
 
 global_SL = function(train_all, t, outcome, 
-                     sl, stack_pool, stack_screen=NULL, 
+                     sl, cv_stack_pool, cv_stack_screen=NULL, 
                      covars, covars_wbaseline,
                      test_size=5, mini_batch=5, V=NULL,
                      cv="folds_rolling_origin", first_window=1, window_size=1,
@@ -64,11 +64,26 @@ global_SL = function(train_all, t, outcome,
                                  V=V)
   }
   
+  #### TODO
+  #Since we assign weights later on, its ok to do this
+  #If you had an event ever in the window, assign 1. 
+  #If you never had an event in the window, assign 0. 
+  #if(summary_outcome){
+  #  lapply(samples, function(s){
+  #    id_test_data<-test_data[test_data$subject_id==s,c("Y1","time")]
+  #    lapply(folds, function(fold){
+  #      index_val<-validation()
+  #      id_test_data[id_test_data$time==index_val,]
+  #    })
+  #    
+  #    })
+  #}
+  
   # create the sl3 task with time-varying covariates
   task <- make_sl3_Task(
     data = test_data, covariates = covars,
     outcome = outcome, folds=folds)
-  
+
   # create the sl3 task:
   task_baseline <- make_sl3_Task(
     data = test_data, covariates = covars_wbaseline,
@@ -80,13 +95,14 @@ global_SL = function(train_all, t, outcome,
   regularSL <- NULL
   
   #Fit the global learner:
-  globalSL<-stack_pool$train(task)
-  globalSL_baseline<-stack_pool$train(task_baseline)
-  
+  globalSL <- cv_stack_pool$train(task)
+  globalSL_baseline<-cv_stack_pool$train(task_baseline)
+
   if(!is.null(stack_screen)){
     #Fit the global learner with screeners:
-    globalSL_screen<-stack_screen$train(task)
-    globalSL_screen_baseline<-stack_screen$train(task_baseline)
+    cv_stack_screen <- Lrnr_cv$new(stack_screen)
+    globalSL_screen<-cv_stack_screen$train(task)
+    globalSL_screen_baseline<-cv_stack_screen$train(task_baseline)
   }else{
     globalSL_screen<-NULL
     globalSL_screen_baseline<-NULL
@@ -107,7 +123,7 @@ global_SL = function(train_all, t, outcome,
 individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
                          first_window=1, window_size=5,
                          test_size,mini_batch,
-                         covars_wbaseline,stack_individual, 
+                         covars_wbaseline,cv_stack_individual, 
                          gap = 0){
   
   #Subset to sample with subject id id
@@ -141,7 +157,9 @@ individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
   indregularSL<-NULL
   
   #Fit the global learner:
-  individualSL<-stack_individual$train(task)
+  individualSL<-cv_stack_individual$train(task)
+  
+  individualSL$predict()
   
   return(list(t=t, 
               indregularSL=indregularSL,
@@ -181,13 +199,15 @@ individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
 #folds_rolling_origin time-series cross-validation.
 #window_size: size of the training set (always of size window_size). This parameter is specific to the 
 #folds_rolling_window time-series cross-validation.
+#summary_outcome: Validate and evaluate the CombinedSL on a single summary measure of the test window.
 
 combine_SL = function(train_all, outcome, t, 
-                      stack_pool, stack_individual, stack_screen=NULL, sl,
+                      cv_stack_pool, cv_stack_individual, cv_stack_screen=NULL, sl,
                       covars, covars_baseline,
                       id=NULL, cv="folds_rolling_origin",
                       gap=0, h=1, test_size=5, mini_batch=5,
-                      first_window=1, window_size=5, gap_training = 0){
+                      first_window=1, window_size=5, gap_training = 0,
+                      summary_outcome=TRUE){
   
   #Combine time-varying and baseline covariates
   covars_wbaseline <- c(covars, covars_baseline)
@@ -201,15 +221,36 @@ combine_SL = function(train_all, outcome, t,
     samples <- id
   }
   
+  #External validation: just future times for all samples.
+  #lapply(samples, function(sample){
+  #  test_data_ext <- train_all[train_all$subject_id==sample,]
+  #  if(cv=="folds_rolling_origin"){
+  #    folds <- origami::make_folds(test_data_ext,
+  #                                 fold_fun = folds_rolling_origin,
+  #                                 first_window = first_window,
+  #                                 validation_size = test_size, gap = gap,
+  #                                 batch = mini_batch)
+  #  }else if(cv=="folds_rolling_window"){
+  #    folds <- origami::make_folds(test_data_ext,
+  #                                 fold_fun = folds_rolling_window,
+  #                                 window_size = window_size,
+  #                                 validation_size = test_size, gap = gap,
+  #                                 batch = mini_batch)
+  #  }
+  #  #Take the last cv
+  #  fold<-folds[[length(folds)]]
+  #  test_data_ext<-test_data_ext[validation(),]
+  #})
+
   #Train the Global SLs:
   global_SL_t<-global_SL(train_all=train_all, t=t, outcome=outcome, 
-                         sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
+                         sl=sl, cv_stack_pool=cv_stack_pool, cv_stack_screen=cv_stack_screen,
                          covars=covars, covars_wbaseline=covars_wbaseline,
                          test_size=test_size, mini_batch=mini_batch,
                          cv=cv, first_window=first_window, window_size=window_size,
                          gap = gap_training)
   global_SL_t_reg<-global_SL(train_all=train_all, t=t, outcome=outcome, 
-                         sl=sl, stack_pool=stack_pool, stack_screen=stack_screen,
+                         sl=sl, cv_stack_pool=cv_stack_pool, cv_stack_screen=cv_stack_screen,
                          covars=covars, covars_wbaseline=covars_wbaseline,
                          test_size=test_size, mini_batch=mini_batch,
                          cv="folds_vfold", V=10, first_window=first_window, 
@@ -222,7 +263,7 @@ combine_SL = function(train_all, outcome, t,
                                                                test_size=test_size,
                                                                mini_batch=mini_batch,
                                                                covars_wbaseline=covars_wbaseline,
-                                                               stack_individual=stack_individual,
+                                                               cv_stack_individual=cv_stack_individual,
                                                                gap = gap_training)})
   
   # create the sl3 task:
@@ -430,6 +471,12 @@ combine_SL = function(train_all, outcome, t,
     pred_regular_SL=pred_regular_SL,
     #Final, weighted prediction for the one sample SL
     pred_individual_SL=pred_individual_SL,
+    #Separate predictions for all samples:
+    pred_global_SL_baseline_reg=pred_global_SL_baseline_reg,
+    pred_global_SL=pred_global_SL,
+    pred_global_SL_baseline=pred_global_SL_baseline,
+    pred_global_SL_screen=pred_global_SL_screen,
+    pred_global_SL_screen_baseline=pred_global_SL_screen_baseline,
     #t+h truth for all the samples.
     truth=truths, 
     #Predictions for each individual learner.
