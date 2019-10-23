@@ -245,6 +245,51 @@ calculations <- function(res){
   return(comSL_summary)
 }
 
+calculate_ind_AUCs <- function(res_all){
+  
+  ind_res <- list()
+  ind_AUCs <- list()
+  
+  for(i in 1:length(res_all[[1]]$preds_fin)){
+    truths <- lapply(res_all, function(res){
+      factor(res$truth[[i]]$hypo_event, levels = c(0,1))})
+    preds_com <- lapply(res_all, function(res) res$preds_fin[[i]][,1])
+    preds_reg <- lapply(res_all, function(res) res$pred_regular_SL[[i]][,1])
+    preds_ind <- lapply(res_all, function(res) res$pred_individual_SL[[i]][,1])
+    id <- substring(colnames(res_all[[1]]$preds_fin[[i]]), 7)
+    
+    df <- list()
+    for(j in 1:length(truths)){
+      t <- rep(as.numeric(names(truths)[[j]]), length(truths[[j]]))
+      df[[j]] <- data.frame(training_time = t, truth = truths[[j]],
+                            pred_com = preds_com[[j]], 
+                            pred_reg = preds_reg[[j]], 
+                            pred_ind = preds_ind[[j]])
+    }
+    df <- bind_rows(df)
+    subject_id <- rep(id, nrow(df))
+    ind_res[[i]] <- data.table(subject_id, df)
+
+    if(length(unique(ind_res[[i]]$truth)) == 1){
+      AUC_com <- AUC_reg <- AUC_ind <- NA
+      ind_AUCs[[i]] <- data.frame(subject_id = id, AUC_com, AUC_reg, AUC_ind)
+    }
+    if(length(unique(ind_res[[i]]$truth)) > 1){
+      roc_com <- roc(ind_res[[i]]$truth, ind_res[[i]]$pred_com, ci = TRUE)
+      roc_reg <- roc(ind_res[[i]]$truth, ind_res[[i]]$pred_reg, ci = TRUE)
+      roc_ind <- roc(ind_res[[i]]$truth, ind_res[[i]]$pred_ind, ci = TRUE)
+      AUC_com <- as.numeric(ci.auc(auc(roc_com)))[2]
+      AUC_reg <- as.numeric(ci.auc(auc(roc_reg)))[2]
+      AUC_ind <- as.numeric(ci.auc(auc(roc_ind)))[2]
+      ind_AUCs[[i]] <- data.frame(subject_id = id, AUC_com, AUC_reg, AUC_ind)
+    }
+  }
+  ind_AUCs_df <- bind_rows(ind_AUCs) %>%
+    arrange(AUC_com)
+  return(list(ind_AUCs_df = ind_AUCs_df,
+              ind_res = ind_res))
+}
+
 plot_coefvtime <- function(comSL_summary_list, weight_grouping = c("max", "ave"), 
                            cv_type){
   if(weight_grouping == "max"){
@@ -289,3 +334,5 @@ calculate_AUCs <- function(comSL_summary_list, cv_type){
   colnames(AUCs_df) <- "AUC"
   return(AUCs_df)
 }
+
+
