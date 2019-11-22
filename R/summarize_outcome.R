@@ -3,7 +3,7 @@ summary_function <- function(vector, function_name) {
   FUN(vector) 
 }
 
-add_summary_outcomes <- function(data, gap = 30, summary_window = 15, 
+add_summary_outcome <- function(data, gap = 30, summary_window = 15, 
                                 summary_measure = "median"){
   dat <- data %>%
   group_by(subject_id) %>%
