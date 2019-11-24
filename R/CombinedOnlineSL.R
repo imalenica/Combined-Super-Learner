@@ -64,21 +64,6 @@ global_SL = function(train_all, t, outcome,
                                  V=V)
   }
   
-  #### TODO
-  #Since we assign weights later on, its ok to do this
-  #If you had an event ever in the window, assign 1. 
-  #If you never had an event in the window, assign 0. 
-  #if(summary_outcome){
-  #  lapply(samples, function(s){
-  #    id_test_data<-test_data[test_data$subject_id==s,c("Y1","time")]
-  #    lapply(folds, function(fold){
-  #      index_val<-validation()
-  #      id_test_data[id_test_data$time==index_val,]
-  #    })
-  #    
-  #    })
-  #}
-  
   # create the sl3 task with time-varying covariates
   task <- make_sl3_Task(
     data = test_data, covariates = covars,
@@ -98,9 +83,8 @@ global_SL = function(train_all, t, outcome,
   globalSL <- cv_stack_pool$train(task)
   globalSL_baseline<-cv_stack_pool$train(task_baseline)
 
-  if(!is.null(stack_screen)){
+  if(!is.null(cv_stack_screen)){
     #Fit the global learner with screeners:
-    cv_stack_screen <- Lrnr_cv$new(stack_screen)
     globalSL_screen<-cv_stack_screen$train(task)
     globalSL_screen_baseline<-cv_stack_screen$train(task_baseline)
   }else{
@@ -158,8 +142,6 @@ individual_SL = function(train_all,t,id, cv="folds_rolling_origin",
   
   #Fit the global learner:
   individualSL<-cv_stack_individual$train(task)
-  
-  individualSL$predict()
   
   return(list(t=t, 
               indregularSL=indregularSL,
