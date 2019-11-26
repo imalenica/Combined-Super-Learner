@@ -1,0 +1,522 @@
+---
+title: "MIMIC II Data Analysis"
+author: "Ivana Malenica and Rachael Phillips"
+date: "September, 2019"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{lscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{float}
+- \usepackage{booktabs}
+- \usepackage{caption}
+- \usepackage{capt-of}
+---
+
+```{r setup, echo = FALSE}
+options(warn=-1)
+suppressMessages(library(xtable))
+suppressMessages(library(here))
+suppressMessages(library(tidyverse))
+suppressMessages(library(data.table))
+suppressMessages(library(sl3))
+suppressMessages(library(origami))
+suppressMessages(library(SuperLearner))
+suppressMessages(library(dplyr))
+suppressMessages(library(kableExtra))
+suppressMessages(library(pROC))
+
+options(xtable.comment = FALSE)
+
+source(here::here("R", "utils_mimic.R"))
+source(here::here("R", "CombinedOnlineSL_v2.R"))
+load(here::here("Data", "mimic_all.Rdata"))
+```
+
+# Overview of the Data
+
+We only considered patients that had:
+
+* at least 8 hours of data.
+
+* at most 1 min time gap between two consecutive measurements. 
+
+In the table below, we explore how many patients had at least one hypotensive 
+episode. The outcome function `Y1` was used to specify hypotensive events. By 
+definition, a hypotensive episode for time $t$ is defined as either:
+
+1. `abpmean` at time $t$ < 65 mmHg and the 5-minute window around time $t$ 
+    (i.e., 10 time-points, $t_{-5}, ..., t_{+5}$) contains at least 5 
+    time-points in which `abpmean` < 65.
+2. the 5-minute window around time $t$ contains at least 8 time-points in which 
+   `abpmean` < 65.
+
+\vspace{.2in}
+```{r, examine_data, echo=FALSE}
+# Filter data so there is no more than 1 minute gap between observations.
+# Subset data to samples that have at least 8 hours of data.
+dat <- eval_missingness(min = 1, dataset = mimic_all, total_hrs = 8)[["dat"]] 
+# remove these two subjects with too many unlikely low systolic bp values
+ids_many_negative_abpsys <- c("15464", "4451")
+dat <- dat[!(dat$subject_id %in% ids_many_negative_abpsys),]
+dat <- new_Y_sol1(dat, window = 5, cutoff = 65)
+dat$hypo_event <- dat$Y1
+
+#Number of subjects with at least one event:
+df <- dat %>%
+  dplyr::select(c("subject_id", "hypo_event")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::mutate(sum_hypo_events = sum(hypo_event)) %>%
+  dplyr::select(c("subject_id", "sum_hypo_events")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize_all(unique)
+
+#Samples with events:
+sample_y1<-df[df$sum_hypo_events>0,1]
+#Samples with no events:
+sample_y0<-df[df$sum_hypo_events==0,1]
+
+event_summary <- rbind.data.frame(dim(sample_y1)[1],
+                                  dim(sample_y0)[1])
+colnames(event_summary) <- "Number of Samples"
+row.names(event_summary) <- c("> 0 hypotensive episodes",
+                              "0 hypotensive episodes")
+event_summary
+```
+
+# Prepare Data for the Analysis
+
+```{r, prep_data, results='asis', echo=FALSE}
+#Add the time column
+dat <- dat %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::mutate(time = seq(1,n(), 1))
+# note that we could also use: dat$time <- dat$min_elapsed
+
+outcome <- "hypo_event"
+
+#Issues with "care_unit"
+covars_baseline <- c("gender","age", "admission_type_descr", 
+                     "sapsi_first", "sofa_first", "bmi", "rank_icu",
+                     "imputed_age", "imputed_bmi", "imputed_sofa", 
+                     "imputed_sapsi")
+
+covars_timevarying <- c("amine", "sedation", "ventilation", "spo2", "hr", 
+                        "abpmean", "imputed_abpmean")
+```
+
+Below we list covariates we use for the further analysis. In particular, we can 
+classify them as follows:
+
+* Baseline Covariates
+
+```{r, baseline, echo=FALSE, eval=TRUE}
+covars_baseline
+```
+
+* Time-varying Covariates
+
+```{r, timevar, echo=FALSE, eval=TRUE}
+covars_timevarying
+```
+
+# Build the Combined Super Learner
+
+The combined online super learner also uses the individual super learner, which 
+learns only from one sample at a time. For the individual super learner, we 
+incorporate the above described covariates as well. In addition, we consider two 
+different Cross-Validation schemes that are used to *train* the combined super 
+learner:
+
+\vspace{.2in}
+
+* Rolling Origin:
+  * initial training set size 15 minutes
+  * test set size 15 minutes
+  * increase training set size by increments of 5 minutes
+  * for example, the first fold trains on minutes 1-15 and tests on minutes 
+  15-30, the second fold trains on minutes 1-20 and tests on minutes 
+  20-35, and the third fold trains on minutes 1-25 and tests on minutes 
+  25-40.
+  
+\vspace{.2in}
+
+* Rolling Window:  
+  * each window size is 15 minutes
+  * test set size 15 minutes 
+  * increase training set size by increments of 5 minutes
+  * for example, the first fold trains on minutes 1-15 and tests on minutes 
+  15-30, the second fold trains on minutes 5-20 and tests on minutes 
+  20-35, and the third fold trains on minutes 10-25 and tests on minutes 
+  25-40.
+  
+Note that the test sets described in the two cross-validation schemes are used 
+to train the pooled/global and individual SLs. These test sets are not used to 
+construct the weights for the combined SL.
+  
+\vspace{.2in}
+
+To *construct* the combined super learner (i.e., combine the weights from the
+pooled SL and individual SL), we incorporate a gap of 30 minutes between the 
+last trained time point and the first prediction time point. Also, the
+prediction period is the first 15-minutes following the 30-minute gap between
+the training data. 
+
+\vspace{.2in}
+
+As explored in previous simulations, we only consider the binary outcome, 
+instead of the continuous (even though the combined SL has support for both).
+  
+For the base learning library, we consider variations of xgboost: 
+
+\vspace{.2in}
+```{r, prep_SL, results='asis', echo=FALSE, eval=TRUE}
+grid_params = list(max_depth = c(2,4,6,8),
+                   eta = c(0.001, 0.01, 0.1, 0.2, 0.3))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+})
+stack <- make_learner(Stack, xgb_learners)
+
+screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
+cor_pipeline <- make_learner(Pipeline, screen_cor, stack)
+stack_screen <- make_learner(Stack, cor_pipeline, stack)
+
+metalearner <- make_learner(Lrnr_nnls)
+sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
+
+cv_stack<-Lrnr_cv$new(stack)
+cv_stack_screen<-Lrnr_cv$new(stack_screen)
+
+stack
+```
+\vspace{.2in}
+
+\pagebreak
+
+On the previous page, we mentioned that we consider a 30-minute time gap between
+the last trained time point and the first prediction time point. For evaluation 
+purposes, we consider the following gaps of time (in minutes) between the last 
+trained time point and the first prediction time point:
+
+```{r, gaps, results='asis', echo=FALSE, eval=TRUE}
+gaps <- seq(15,45,5)
+gaps
+```
+
+\vspace{.2in}
+
+We also consider the following training times: 
+
+```{r, times, results='asis', echo=FALSE, eval=TRUE}
+times <- seq(30, 420, 30)
+times
+```
+
+```{r, run_SL, results='asis', echo=FALSE, eval=FALSE}
+ptm <- proc.time()
+comSL_cvrw <- lapply(gaps, function(x){
+  SL_times <- mclapply(times, function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = cv_stack, 
+               stack_individual = cv_stack, stack_screen = cv_stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_window", gap = x, h = 15, test_size = 10, 
+               mini_batch = 5, window_size = 15)
+    }, mc.cores = 20)
+  names(SL_times) <- paste0(times)
+  return(SL_times)
+  })
+names(comSL_cvrw) <- paste0(gaps)
+proc.time() - ptm
+save(comSL_cvrw, file = here("Results", "comSL_cvrw.Rdata"), compress = TRUE)
+#       user     system    elapsed
+# 224718.691   4693.963  23720.388
+# 23720.388/60/60/7 ~ 1 hrs to run combine_SL across the times sequence
+# 23720.388/60/60 = 6.5 hrs to run combine_SL across the times & gaps sequences
+
+ptm <- proc.time()
+comSL_cvro <- lapply(gaps, function(x){
+  SL_times <- mclapply(times, function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv = "folds_rolling_origin", gap = x, h = 15, test_size = 15, 
+               mini_batch = 5, window_size = 15)
+    }, mc.cores = 20)
+  names(SL_times) <- paste0(times)
+  return(SL_times)
+  })
+names(comSL_cvro) <- paste0(gaps)
+proc.time() - ptm
+save(comSL_cvro, file = here("Results", "comSL_cvro.Rdata"), compress = TRUE)
+#       user     system    elapsed
+# 227174.380   4152.363  24080.005
+
+# modify gap_training
+ptm <- proc.time()
+comSL_cvrw_gap_training <- lapply(gaps, function(x){
+  SL_times <- mclapply(times[3:14], function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_window", gap = x, h = 15, test_size = 15, 
+               mini_batch = 5, window_size = 15, gap_training = x)
+    }, mc.cores = 20)
+  names(SL_times) <- paste0(times[3:14])
+  return(SL_times)
+  })
+names(comSL_cvrw_gap_training) <- paste0(gaps)
+proc.time() - ptm
+save(comSL_cvrw_gap_training, 
+     file = here("Results", "comSL_cvrw_gap_training.Rdata"), compress = TRUE)
+
+ptm <- proc.time()
+comSL_cvro_gap_training <- lapply(gaps, function(x){
+  SL_times <- mclapply(times[3:14], function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_origin", gap = x, h = 15, test_size = 15, 
+               mini_batch = 5, window_size = 15, gap_training = x)
+    }, mc.cores = 20)
+  names(SL_times) <- paste0(times[3:14])
+  return(SL_times)
+  })
+names(comSL_cvro_gap_training) <- paste0(gaps)
+proc.time() - ptm
+save(comSL_cvro_gap_training, 
+     file = here("Results", "comSL_cvro_gap_training.Rdata"), compress = TRUE)
+
+test_size <- seq(10, 60, 10)
+ptm <- proc.time()
+comSL_cvro_test_size <- lapply(test_size, function(x){
+  SL_times <- mclapply(times[3:13], function(y){
+    combine_SL(train_all = dat, outcome, t = y, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_origin", gap = 30, h = x, test_size = x, 
+               mini_batch = 5, window_size = 15)
+   }, mc.cores = 20)
+  names(SL_times) <- paste0(times[3:13])
+  return(SL_times)
+  })
+names(comSL_cvro_test_size) <- paste0(test_size)
+proc.time() - ptm
+save(comSL_cvro_test_size, 
+     file = here("Results", "comSL_cvro_test_size.Rdata"), compress = TRUE)
+
+
+cvro_1 <- combine_SL(train_all = dat, outcome, t = 30, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_origin", gap = 30, h = 1, test_size = 1, 
+               mini_batch = 5, window_size = 1)
+save(cvro_1, file = here("Results", "comSL_cvro_1.Rdata"), compress = TRUE)
+cvrw_1 <- combine_SL(train_all = dat, outcome, t = 30, stack_pool = stack, 
+               stack_individual = stack, stack_screen = stack_screen, sl = sl,
+               covars = covars_timevarying, covars_baseline = covars_baseline,
+               cv="folds_rolling_window", gap = 30, h = 1, test_size = 1, 
+               mini_batch = 5, window_size = 1)
+save(cvrw_1, file = here("Results", "comSL_cvrw_1.Rdata"), compress = TRUE)
+
+# examine results
+load(here("Results", "comSL_cvro_1.Rdata"))
+load(here("Results", "comSL_cvrw_1.Rdata"))
+pred_cvro_1 <- as.numeric(unlist(cvro_1$preds_fin))
+pred_cvrw_1 <- as.numeric(unlist(cvrw_1$preds_fin))
+all(pred_cvrw_1 == pred_cvro_1) # TRUE
+
+# subset to samples with hypotensive events:
+df <- dat %>%
+  dplyr::select(c("subject_id", "hypo_event")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::mutate(sum_hypo_events = sum(hypo_event)) %>%
+  dplyr::select(c("subject_id", "sum_hypo_events")) %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::summarize_all(unique)
+ids_hypo <- as.character((df[df$sum_hypo_events > 0, 1])$subject_id)
+dat$subject_id <- as.character(dat$subject_id)
+hypo_dat <- dat[dat$subject_id %in% ids_hypo, ]
+comSL_cvro_1_hypo <- combine_SL(train_all = hypo_dat, outcome, t = 30, 
+                                stack_pool = stack, stack_individual = stack,
+                                stack_screen = stack_screen, sl = sl,
+                                covars = covars_timevarying, 
+                                covars_baseline = covars_baseline,
+                                cv="folds_rolling_origin", gap = 30, h = 1, 
+                                test_size = 1, mini_batch = 5, window_size = 1)
+save(comSL_cvro_1_hypo, file = here("Results", "comSL_cvro_1_hypo.Rdata"), compress = TRUE)
+comSL_cvrw_1_hypo <- combine_SL(train_all = hypo_dat, outcome, t = 30, 
+                                stack_pool = stack, stack_individual = stack,
+                                stack_screen = stack_screen, sl = sl,
+                                covars = covars_timevarying, 
+                                covars_baseline = covars_baseline,
+                                cv="folds_rolling_window", gap = 30, h = 1, 
+                                test_size = 1, mini_batch = 5, window_size = 1)
+save(comSL_cvrw_1_hypo, file = here("Results", "comSL_cvrw_1_hypo.Rdata"), 
+     compress = TRUE)
+
+# examine results
+load(here("Results", "comSL_cvro_1_hypo.Rdata"))
+load(here("Results", "comSL_cvrw_1_hypo.Rdata"))
+pred_cvro_1_hypo <- as.numeric(unlist(comSL_cvro_1_hypo$preds_fin))
+pred_cvrw_1_hypo <- as.numeric(unlist(comSL_cvrw_1_hypo$preds_fin))
+all(pred_cvrw_1_hypo == pred_cvro_1_hypo) # TRUE
+
+```
+
+# Evaluate Performance for Combined Super Learner
+
+```{r, res_SL, results='asis', echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+
+load(here("Results", "comSL_cvrw.Rdata"))
+load(here("Results", "comSL_cvro.Rdata"))
+load(here("Results", "comSL_cvro_gap_training.Rdata"))
+load(here("Results", "comSL_cvrw_gap_training.Rdata"))
+load(here("Results", "comSL_cvro_test_size.Rdata"))
+  
+get_calculations <- function(list_gaps_times, 
+                             cv_type = c("Rolling Origin", "Rolling Window")){
+  calcs_gaps <- lapply(list_gaps_times, function(x){
+    comSL_summary_list <- lapply(x, function(y){
+      calculations(y)
+      })
+    names(comSL_summary_list) <- names(x)
+    
+    avg_loss_all <- t(cbind.data.frame(
+      lapply(comSL_summary_list, function(z) z$avg_loss)))
+    
+    plot_max <- plot_coefvtime(comSL_summary_list, "max", cv_type) 
+    plot_ave <- plot_coefvtime(comSL_summary_list, "ave", cv_type)
+    AUCs <- calculate_AUCs(comSL_summary_list)
+    
+    all_results <- list(avg_loss_all = avg_loss_all, plot_max = plot_max,
+                        plot_ave = plot_ave, AUCs = AUCs)
+    return(all_results)
+    })
+  names(calcs_gaps) <- names(list_gaps_times)
+  
+  # plot the AUCs across time and categorized by the various gap times
+  AUCs <- cbind.data.frame(lapply(calcs_gaps, '[[', "AUCs"))
+  colnames(AUCs) <- names(list_gaps_times)
+  AUCs <- cbind.data.frame(Time = row.names(AUCs), AUCs)
+  AUC_melt <- melt(AUCs, id = "Time")
+  AUC_melt$Time <- as.numeric(levels(AUC_melt$Time))[AUC_melt$Time]
+  AUC_plot <- ggplot(AUC_melt, aes(x = Time, y = value, colour = variable)) +
+    geom_line(aes(group = variable), size = 0.4) + 
+    geom_point(shape = 1) + 
+    ggtitle(paste0("AUCs over Time and across Various Test Sizes 
+                   Between Last Training Time-Point and First Prediction Time-Point 
+                   for ",cv_type, " CV")) +
+    labs(x = "Training Time (Minutes)", 
+         y = "AUC",
+         color = "Test Size (Minutes)")
+  
+  # remove nested list structure from other objects
+  avg_losses <- lapply(calcs_gaps, '[[', "avg_loss_all")
+  plots_max <- lapply(calcs_gaps, '[[', "plot_max")
+  plots_ave <- lapply(calcs_gaps, '[[', "plot_ave")
+  
+  return(list(AUC_plot = AUC_plot,
+              avg_losses = avg_losses,
+              plots_max = plots_max, 
+              plots_ave = plots_ave))
+}
+
+calcs_cvro <- get_calculations(comSL_cvro, cv_type = "Rolling Origin")
+calcs_cvrw <- get_calculations(comSL_cvrw, cv_type = "Rolling Window")
+calcs_cvro_gap_training <- get_calculations(comSL_cvro_gap_training, 
+                                            cv_type = "Rolling Origin")
+calcs_cvrw_gap_training <- get_calculations(comSL_cvrw_gap_training, 
+                                            cv_type = "Rolling Window")
+calcs_cvro_test_size <- get_calculations(comSL_cvro_test_size, 
+                                         cv_type = "Rolling Origin")
+```
+
+## AUC 
+
+```{r, roc_SL, echo = FALSE, eval = TRUE}
+knitr::include_graphics(here("Results", "AUC_cvro.pdf"))
+knitr::include_graphics(here("Results", "AUC_cvrw.pdf"))
+knitr::include_graphics(here("Results", "AUC_cvro_test_size.pdf"))
+```
+
+\pagebreak
+
+## Super Learner Coefficients
+
+### 15-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL15, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[1]]
+calcs_cvrw[["plots_ave"]][[1]]
+```
+
+### 20-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL20, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[2]]
+calcs_cvrw[["plots_ave"]][[2]]
+```
+
+### 25-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL25, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[3]]
+calcs_cvrw[["plots_ave"]][[3]]
+```
+
+### 30-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL30, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[4]]
+calcs_cvrw[["plots_ave"]][[4]]
+```
+
+### 35-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL35, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[5]]
+calcs_cvrw[["plots_ave"]][[5]]
+```
+
+### 40-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL40, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[6]]
+calcs_cvrw[["plots_ave"]][[6]]
+```
+
+### 45-Minute Gap Between Last Training Time-Point and First Prediction Time-Point
+
+```{r, coef_SL45, results='asis', echo=FALSE, eval=TRUE, out.width='50%'}
+par(mfrow=c(1,1))
+calcs_cvro[["plots_ave"]][[7]]
+calcs_cvrw[["plots_ave"]][[7]]
+```
+
+## Loss for the Super Learner
+
+\tiny
+```{r, loss_SL, echo=FALSE, eval=TRUE}
+calcs_cvro[["avg_losses"]]
+calcs_cvrw[["avg_losses"]]
+```
