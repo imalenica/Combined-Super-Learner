@@ -35,11 +35,16 @@ suppressMessages(library(kableExtra))
 suppressMessages(library(summarytools))
 suppressMessages(library(pROC))
 suppressMessages(library(skimr))
+suppressMessages(library(hablar))
+suppressMessages(library(splitstackshape))
+suppressMessages(library(rlist))
 options(xtable.comment = FALSE)
 source(here::here("R", "utils_mimic.R"))
 source(here::here("R", "summarize_outcome.R"))
 source(here::here("R", "CombinedOnlineSL_v2.R"))
-load(here::here("Data", "data_summaryY.Rdata"))
+source(here::here("R", "CombinedOnlineSL_v2_helper.R"))
+load(here::here("Data", "comSLargs.Rdata"))
+load(here::here("Data", "data_summaryBinY.Rdata"))
 
 st_options(plain.ascii = FALSE,
            style       = "rmarkdown",
@@ -47,6 +52,32 @@ st_options(plain.ascii = FALSE,
 ```
 
 # Overview {-}
+
+# Creating the Dataset
+
+First, we create the dataset with corresponding summary measures. 
+Note that the decision on how much in advance we predict (and over
+which time period) must be made before analysis for now --- 
+as the dataset used will depend on the decision. 
+
+Below we create a dataset that summarizes the abpmean for each patient
+30 minutes in advance, over a 15 minute window. The summary function 
+used to test the algorithm is the Y_sol1:
+
+Hypotensive episode for time t is defined as:
+1. abpmean at time t < 65 mmHg and there is 5-minute window around time t 
+   (i.e., 10 time-points) with at least 5 time-points abpmean < 65.
+   
+Once the episodes are identified for the entire period, we summarize over 
+the window. 
+
+\vspace{.2in}
+```{r, create_data, echo=FALSE, eval=FALSE}
+dat <- comSLargs[[1]]
+data <- add_summary_outcome(dat, summary_measure = "Y_sol1")
+save(data, file = here::here("Data", "data_summaryBinY.Rdata"), 
+     compress = TRUE)
+```
 
 # Overview of the Data
 
@@ -65,13 +96,13 @@ summary statistic for each below.
 ```{r, examine_data, echo=FALSE}
 #Filter data so there is no more that 3 minute gap between observations.
 #Subset data to samples that have at least 8 hours of data.
-dat <- eval_missingness(min = 1, dataset = mimic_all, total_hrs = 8)[["dat"]] 
+dat <- eval_missingness(min = 1, dataset = data, total_hrs = 8)[["dat"]] 
 dat_summary <- dat[,c("abpsys","abpdias","abpmean","spo2", 
-                      "imputed_abpmean","imputed_abpsys_abpdias","hypo_event","amine",
+                      "imputed_abpmean","imputed_abpsys_abpdias","amine",
                       "sedation","ventilation","rank_icu","gender",
                       "age","sapsi_first","sofa_first","bmi",
                       "care_unit","admission_type_descr","imputed_age","imputed_bmi",
-                      "imputed_sofa","imputed_sapsi")]
+                      "imputed_sofa","imputed_sapsi", "time", "Y_summary", "hypo_event")]
 
 names(dat_summary)
 
@@ -81,24 +112,19 @@ names(dat_summary)
        report.title="Summary of all the covariates")
 ```
 
-\vspace{.2in}
-
-We further explore the number of total hypotensive episodes experiences per each 
-patient.
-
-\vspace{.2in}
-
-```{r, examine_data_2, results='asis', echo=FALSE}
-dat$hypo_event <- as.numeric(levels(dat$hypo_event))[dat$hypo_event]
+```{r, examine_data_2, results='asis', echo=FALSE, eval=FALSE}
+#We further explore the number of total hypotensive episodes experiences per each 
+#patient.
+#dat$hypo_event <- as.numeric(levels(dat$hypo_event))[dat$hypo_event]
 
 #Number of subjects with at least one event:
-df <- dat %>%
-  dplyr::select(c("subject_id", "hypo_event")) %>%
-  dplyr::group_by(subject_id) %>%
-  dplyr::mutate(sum_all_events = sum(hypo_event)) %>%
-  dplyr::select(c("subject_id", "sum_all_events")) %>%
-  dplyr::group_by(subject_id) %>%
-  dplyr::summarize_all(unique)
+#df <- dat %>%
+#  dplyr::select(c("subject_id", "hypo_event")) %>%
+#  dplyr::group_by(subject_id) %>%
+#  dplyr::mutate(sum_all_events = sum(hypo_event)) %>%
+#  dplyr::select(c("subject_id", "sum_all_events")) %>%
+#  dplyr::group_by(subject_id) %>%
+#  dplyr::summarize_all(unique)
 
 #Summary of data:
 # print(dfSummary(df[,2]), method = "render", display.labels=FALSE, headings=TRUE,
@@ -106,22 +132,23 @@ df <- dat %>%
 #       report.title="Summary of the sum of hypotensive events by patient")
 ```
 
-Finally, we expore how many patients had at least one episode. 
-442 of the 698 subjects experienced at least one hypotensive event, and the 
-outcome function `Y1` was used to specify hypotensive events. By definition, 
-an hypotensive episode is defined as a 5 minute window with mean arterial pressure (MAP) 
-below 62 mmHg.
+```{r, examine_data_3, results='asis', echo=FALSE, eval=FALSE}
 
-```{r, examine_data_3, results='asis', echo=FALSE}
+#Finally, we expore how many patients had at least one episode. 
+#442 of the 698 subjects experienced at least one hypotensive event, and the 
+#outcome function `Y1` was used to specify hypotensive events. By definition, 
+#an hypotensive episode is defined as a 5 minute window with mean arterial pressure (MAP) 
+#below 62 mmHg.
+
 #Samples with events:
-sample_y1<-df[df$sum_all_events>0,1]
+#sample_y1<-df[df$sum_all_events>0,1]
 #Samples with no events:
-sample_y0<-df[df$sum_all_events==0,1]
+#sample_y0<-df[df$sum_all_events==0,1]
 
-event_summary <- rbind.data.frame(dim(sample_y1)[1],
-                                  dim(sample_y0)[1])
-colnames(event_summary) <- "Number of Events"
-row.names(event_summary) <- c("Samples with > 0 episodes",
+#event_summary <- rbind.data.frame(dim(sample_y1)[1],
+#                                  dim(sample_y0)[1])
+#colnames(event_summary) <- "Number of Events"
+#row.names(event_summary) <- c("Samples with > 0 episodes",
                               "Samples with 0 episodes")
 
 # print(dfSummary(event_summary), method = "render", display.labels=FALSE, headings=TRUE,
@@ -132,11 +159,7 @@ row.names(event_summary) <- c("Samples with > 0 episodes",
 # Prepare Data for the Analysis
 
 ```{r, prep_data, results='asis', echo=FALSE}
-#Add the time column
-dat <- dat %>%
-  dplyr::group_by(subject_id) %>%
-  dplyr::mutate(time = seq(1,n(), 1))
-
+#outcome <- "Y_summary"
 outcome <- "hypo_event"
 
 covars_baseline <- c("gender","age","care_unit", "admission_type_descr", 
@@ -144,7 +167,7 @@ covars_baseline <- c("gender","age","care_unit", "admission_type_descr",
                      "imputed_age", "imputed_bmi", "imputed_sofa", 
                      "imputed_sapsi")
 
-covars_timevarying <- c("amine", "sedation", "ventilation", "spo2", "hr", 
+covars_timevarying <- c("amine", "sedation", "ventilation", "spo2", "time", 
                         "abpmean", "imputed_abpmean")
 ```
 
@@ -209,35 +232,28 @@ screen_cor <- Lrnr_pkg_SuperLearner_screener$new("screen.corP")
 cor_pipeline <- make_learner(Pipeline, screen_cor, stack)
 stack_screen <- make_learner(Stack, cor_pipeline, stack)
 
+cv_stack <- Lrnr_cv$new(stack)
+cv_stack_screen <- Lrnr_cv$new(stack_screen)
+
 metalearner <- make_learner(Lrnr_nnls)
 sl <- Lrnr_sl$new(learners = stack, metalearner = metalearner)
 
-stack
+cv_stack
 ```
 
 ```{r, run_SL, results='asis', echo=FALSE, eval=FALSE}
 times <- seq(30, 420, by = 30)[-1]
 
 comSL_cvrw <- lapply(times, function(x){
-  combine_SL(train_all = dat, outcome, t = x, stack_pool = stack, 
-             stack_individual = stack, stack_screen = stack_screen, sl = sl,
+  combine_SL(train_all = dat, outcome, t = x, stack_pool = cv_stack, 
+             stack_individual = cv_stack, stack_screen = cv_stack_screen, sl = sl,
              covars = covars_timevarying, covars_baseline = covars_baseline,
-             cv = "folds_rolling_window", gap = 30, h = 15, 
-             test_size = 15, mini_batch = 5, window_size = 15)
+             cv = "folds_rolling_window", 
+             gap_training = 30, h = 15, test_size = 15, mini_batch = 5, window_size = 15,
+             outcome_summary=FALSE, adapt_covs=c("gender","rank_icu"))
   })
 names(comSL_cvrw) <- paste0(times, " min training time")
 save(comSL_cvrw, file = here::here("Results", "comSL_cvrw.Rdata"), 
-     compress = TRUE)
-
-comSL_cvro <- lapply(times, function(x){
-  combine_SL(train_all = dat, outcome, t = x, stack_pool = stack, 
-             stack_individual = stack, stack_screen = stack_screen, sl = sl,
-             covars = covars_timevarying, covars_baseline = covars_baseline,
-             cv = "folds_rolling_origin", gap = 30, h = 15, 
-             test_size = 15, mini_batch = 5, window_size = 15)
-})
-names(comSL_cvro) <- paste0(times, " min training time")
-save(comSL_cvro, file = here::here("Results", "comSL_cvro.Rdata"), 
      compress = TRUE)
 ```
 
