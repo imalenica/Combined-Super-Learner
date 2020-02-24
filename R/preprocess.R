@@ -103,86 +103,64 @@ subset(levs_by_id, rowSums(levs_by_id) - levs_by_id$subject_id != 1)
 # SUMMARY - we retain all 1,282 subjects with "baseline" covariate information
 # and numerics information
 
-########################## insufficient numerics data ##########################
-
-dat <- full_num %>%
-  dplyr::group_by(subject_id) %>%
-  mutate(init_time_and_date = min(time_and_date)) %>%
-  mutate(min_elapsed = as.integer((time_and_date -
-                                     init_time_and_date) / 60) + 1) %>%
-  dplyr::filter(min_elapsed >= 90)
-full_num <- full_num[(full_num$subject_id %in% dat$subject_id),]
-
 ########################## outcome measurement error ###########################
 
-sum(is.na(new_numerics$abpmean))
+abpsys <- ifelse(full_num$abpsys == full_num$abpdias | full_num$abpsys < 0 |
+                   full_num$abpdias < 0, NA, full_num$abpsys)
+abpdias <- ifelse(full_num$abpsys == full_num$abpdias | full_num$abpdias < 0 | 
+                    full_num$abpsys < 0, NA, full_num$abpdias)
+full_num$abpdias <- abpdias
+full_num$abpsys <- abpsys
 
-detect_outliers <- function(id) {
-  odd <- dplyr::filter(df_outcome_odd, subject_id == id)
-  all <- dplyr::filter(full_num, subject_id == id)
-  x <- all[!(all$time_and_date %in% odd$time_and_date),]
-  qnt <- quantile(x$abpmean, probs=c(.25, .75), na.rm = TRUE)
-  H <- 1.5 * IQR(x$abpmean, na.rm = TRUE)
-  odd_out <- dplyr::mutate(odd, outlier_abpmean =
-                             ifelse(abpmean < (qnt[1] - H) | 
-                                      abpmean > (qnt[2] + H), 1, 0))
-  odd_out$oddity_abp <- rep(1, nrow(odd_out))
-  return(odd_out)
-}
+is.na.rle <- rle(is.na(full_num$abpdias))
+is.na.rle$values <- is.na.rle$values & is.na.rle$lengths >= 3 
+full_num$abpmean <- ifelse(inverse.rle(is.na.rle), NA, full_num$abpmean)
 
-impute_oddities <- function(id) {
-  
-  oddities <- outcome_odd_df %>%
-    dplyr::filter(subject_id == id) %>%
-    dplyr::mutate(abpmean = ifelse(outlier_abpmean == 1, NA, abpmean))
-  oddities$abpdias <- as.numeric(rep(NA, nrow(oddities)))
-  oddities$abpsys <- as.numeric(rep(NA, nrow(oddities)))
-  
-  all <- dplyr::filter(full_num, subject_id == id)
-  not_oddities <- all[!(all$time_and_date %in% oddities$time_and_date),]
-  not_oddities$outlier_abpmean <- rep(0, nrow(not_oddities))
-  not_oddities$oddity_abp <- rep(0, nrow(not_oddities))
-  
-  full <- full_join(not_oddities, oddities)
-  full_sorted <- full[order(full$subject_id, full$time_and_date), ]
-  full_sorted$abpmean <- as.numeric(full_sorted$abpmean)
-  
-  # last observation carried forward
-  full_sorted$abpmean <- imputeTS::na_locf(full_sorted$abpmean)
-  full_sorted$abpsys <- imputeTS::na_locf(full_sorted$abpsys)
-  full_sorted$abpdias <- imputeTS::na_locf(full_sorted$abpdias)
-  
-  return(full_sorted)
-}
+full_num$spo2 <- ifelse(full_num$spo2 == 0, NA, full_num$spo2)
+full_num$hr <- ifelse(full_num$hr == 0, NA, full_num$hr)
 
-df_outcome_odd <- full_num[(full_num$abpsys == full_num$abpdias),]
-df_outcome_odd <- df_outcome_odd[!(df_outcome_odd$subject_id %in% 
-                                     c(25373,26209)),]
-outcome_odd_list <- lapply(unique(df_outcome_odd$subject_id), detect_outliers)
-outcome_odd_df <- bind_rows(outcome_odd_list)
-dat_clean_list <- lapply(unique(outcome_odd_df$subject_id), impute_oddities)
-dat_clean2 <- bind_rows(dat_clean_list)
+full_num$abpdias_locf <- ifelse(is.na(full_num$abpdias), 1, 0)
+full_num$abpsys_locf <- ifelse(is.na(full_num$abpsys), 1, 0)
+full_num$abpmean_locf <- ifelse(is.na(full_num$abpmean), 1, 0)
+full_num$spo2_locf <- ifelse(is.na(full_num$spo2), 1, 0)
+full_num$hr_locf <- ifelse(is.na(full_num$hr), 1, 0)
 
-dat_new <- full_num[!(full_num$subject_id %in% c(25373,26209)),]
-ids <- setdiff(dat_new$subject_id, dat_clean2$subject_id)
-dat_new <- dat_new[(dat_new$subject_id %in% ids),]
-dat_new$outlier_abpmean <- rep(0, nrow(dat_new))
-dat_new$oddity_abp <- rep(0, nrow(dat_new))
+full_num_list <- lapply(unique(full_num$subject_id), function(i){
+  ind <- dplyr::filter(full_num, subject_id == i)
+  sorted <- ind[order(ind$time_and_date), ]
+  if(nrow(sorted) < 60){
+    print(paste0("Insufficient data for subject_id = ", i))
+    locf_dat <- NULL
+  } else if(any(colSums(sorted[,c(9:13)]) == nrow(sorted))){
+    name <- c(names(which(colSums(sorted[,c(9:13)]) == nrow(sorted))))
+    print(paste0(name, " all NA for subject_id ", i))
+    locf_dat <- NULL
+  } else if(any(colSums(sorted[,c(9:13)]) >= .5*nrow(sorted))){
+    name <- c(names(which(colSums(sorted[,c(9:13)]) >= .5*nrow(sorted))))
+    print(paste0(name, " atleast 50% NA for subject ", i))
+    locf_dat <- NULL
+  } else {
+    sorted$abpmean <- imputeTS::na_locf(sorted$abpmean, na_remaining = "keep")
+    sorted$abpsys <- imputeTS::na_locf(sorted$abpsys, na_remaining = "keep")
+    sorted$abpdias <- imputeTS::na_locf(sorted$abpdias, na_remaining = "keep")
+    sorted$hr <- imputeTS::na_locf(sorted$hr, na_remaining = "keep")
+    sorted$spo2 <- imputeTS::na_locf(sorted$spo2, na_remaining = "keep")
+    locf_dat <- na.omit(sorted)
+  }
+  return(locf_dat)
+})
 
-dat_clean2 <- rbind(dat_clean2, dat_new)
-numerics_clean <- dat_clean2[order(dat_clean2$subject_id, 
-                                   dat_clean2$time_and_date), ]
+num_list <- full_num_list[!sapply(full_num_list, is.null)] 
+num_dat <- do.call(rbind, num_list)
 
-# clearly indicate which columns were imputed 
-colnames(numerics_clean)[9] <- "imputed_abpmean"
-colnames(numerics_clean)[10] <- "imputed_abpsys_abpdias"
+################### add column representing minutes elapsed ####################
+num_clean <- num_dat %>%
+  group_by(subject_id) %>%
+  mutate(init_time_and_date = min(time_and_date)) %>%
+  mutate(min_elapsed = as.integer((time_and_date - init_time_and_date) / 60) + 1)
 
-########################## classifying a hypotensive event #####################
-
-numerics_clean <- new_Y_sol1(numerics_clean, cutoff = 65)
-colnames(numerics_clean)[11] <- "hypo_event"
-
-save(numerics_clean, file = here::here("Data","numerics_clean.Rdata"), compress = TRUE)
+numerics_clean <- num_clean[order(num_clean$subject_id, num_clean$time_and_date), ]
+length(unique(numerics_clean$subject_id)) # 1154
 
 ################################################################################
 # treatment data : incorporate to reflect minute of administration (not hour)
@@ -221,7 +199,6 @@ ventilation <- ventilation[!duplicated(ventilation[,c("subject_id", "realtime")]
 
 ############################# amine and sedation ###############################
 attribution_treatment <- function(sub, trt, dat){
-  print(paste0("subject_id ",sub))
   df2 <- subset(dat, subject_id == sub)
   
   if(trt %in% c("amine", "sedation")){
@@ -245,7 +222,7 @@ attribution_treatment <- function(sub, trt, dat){
       if(nrow(temp0)){
         temp0$txt <- 0
       }
-      all <- rbind(temp1_df, temp0, fill = TRUE)
+      all <- rbind.data.frame(temp1_df, temp0, fill = TRUE)
       }
     if(nrow(df1) == 0){
       df2$txt <- 0
@@ -341,6 +318,7 @@ attribution_treatment <- function(sub, trt, dat){
     }
   }
   all <- all[order(all$time_and_date), ]
+  all <- all %>% distinct()
   if(nrow(all) > nrow(df2)){
     print(paste0("nrow(all) = ", nrow(all), " > nrow(df2) = ", nrow(df2),
                  " for subject_id ",sub))
@@ -357,82 +335,42 @@ numerics_amine_list <- lapply(unique(numerics_clean$subject_id),
                               attribution_treatment, trt = "amine",
                               dat = numerics_clean)
 numerics_amine <- rbindlist(numerics_amine_list)
-numerics_amine <- numerics_amine %>% distinct()
-colnames(numerics_amine)[12] <- "amine"
+colnames(numerics_amine)[16] <- "amine"
 
 # sedation
 numerics_sedation_list <- lapply(unique(numerics_amine$subject_id), 
-                              attribution_treatment, trt = "sedation",
-                              dat = numerics_amine)
+                                 attribution_treatment, trt = "sedation",
+                                 dat = numerics_amine)
 numerics_sedation <- rbindlist(numerics_sedation_list)
-numerics_sedation <- numerics_sedation %>% distinct()
-colnames(numerics_sedation)[13] <- "sedation"
+colnames(numerics_sedation)[17] <- "sedation"
 
 # ventilation 
 numerics_ventilation_list <- lapply(unique(numerics_sedation$subject_id), 
-                                 attribution_treatment, trt = "ventilation",
-                                 dat = numerics_sedation)
+                                    attribution_treatment, trt = "ventilation",
+                                    dat = numerics_sedation)
 numerics_ventilation <- rbindlist(numerics_ventilation_list)
-numerics_ventilation <- numerics_ventilation %>% distinct()
+colnames(numerics_ventilation)[18] <- "ventilation"
+
 dim(numerics_clean)
 dim(numerics_ventilation)
-common <- intersect(numerics_ventilation[,-c(12:14)], numerics_clean)
+common <- intersect(numerics_ventilation[,-c(16:18)], numerics_clean)
 dim(common)
-colnames(numerics_ventilation)[14] <- "ventilation"
 
-num_txt <- numerics_ventilation
-save(num_txt, file = here::here("Data","num_txt.Rdata"), compress = TRUE)
+num_trt <- numerics_ventilation
+save(num_trt, file = here::here("Data","num_trt.Rdata"), compress = TRUE)
 
 ################################################################################
 # covariate data : incorporate relevant covariates
 ################################################################################
 
-df <- merge(num_txt, infos_admission[,c(1:2, 4:11)], 
+df <- merge(num_trt, infos_admission[,c(1:2, 4:11)], 
             by = c("subject_id", "icustay_id"), all.x = TRUE)
 
-df <- df[!(df$age == 0),]
-df$age <- ifelse(df$age == 200, NA, df$age)
+df <- df[!(df$age < 18),]
+df$age <- ifelse(df$age > 115, NA, df$age)
 df$bmi <- ifelse(df$bmi > 60 | df$bmi < 10, NA, df$bmi)
 
-################### impute missing baseline characteristics ####################
 colSums(is.na(df))
-
-# how many subjects require imputing? 44
-s1 <- df %>% dplyr::group_by(subject_id) %>%
-  dplyr::summarize(na_sofa = sum(is.na(sofa_first)))
-s2 <- df %>% dplyr::group_by(subject_id) %>%
-  dplyr::summarize(na_sapsi = sum(is.na(sapsi_first)))
-s3 <- df %>% dplyr::group_by(subject_id) %>%
-  dplyr::summarize(na_age = sum(is.na(age)))
-s4 <- df %>% dplyr::group_by(subject_id) %>%
-  dplyr::summarize(na_age = sum(is.na(bmi)))
-res <- Reduce(merge, list(s1, s2, s3, s4))
-res <- res[apply(res[,-1], 1, function(x) !all(x==0)),]
-s5 <- df %>% dplyr::group_by(subject_id) %>% dplyr::summarize(n = n())
-res <- left_join(res, s5)
-impute <- subset(res, rowSums(res[,c(2:5)]) != 0)
-
-# add column indicating whether or not imputation was performed 
-df$imputed_age <- ifelse(is.na(df$age) == TRUE, 1, 0)
-df$imputed_bmi <- ifelse(is.na(df$bmi) == TRUE, 1, 0)
-df$imputed_sofa <- ifelse(is.na(df$sofa_first) == TRUE, 1, 0)
-df$imputed_sapsi <- ifelse(is.na(df$sapsi_first) == TRUE, 1, 0)
-
-# impute with median
-df$age <- ifelse(is.na(df$age) == TRUE, median(df$age, na.rm = TRUE), df$age)
-df$bmi <- ifelse(is.na(df$bmi) == TRUE, median(df$bmi, na.rm = TRUE), df$bmi)
-df$sofa_first <- ifelse(is.na(df$sofa_first) == TRUE, 
-                        median(df$sofa_first, na.rm = TRUE), df$sofa_first)
-df$sapsi_first <- ifelse(is.na(df$sapsi_first) == TRUE, 
-                         median(df$sapsi_first, na.rm = TRUE), df$sapsi_first)
-
-################### add column representing minutes elapsed ####################
-df <- df %>%
-  dplyr::group_by(subject_id) %>%
-  mutate(min_elapsed = as.integer((time_and_date - min(time_and_date)) / 60)+1)
-
-############################## final touches and save ##########################
-df <- df[,c(1,3,27,4:26)]
 
 df$care_unit <- ifelse(df$care_unit == "1", "MICU",
                        ifelse(df$care_unit == "2", "SICU",
@@ -441,22 +379,24 @@ df$care_unit <- ifelse(df$care_unit == "1", "MICU",
                                             ifelse(df$care_unit == "6", "CCU", 
                                                    NA)))))
 
-mimic <- run_class(data.frame(df),
-                   cols_fac = c("gender", "care_unit", "admission_type_descr",
-                                "amine", "sedation", "ventilation", "hypo_event",
-                                "rank_icu", "imputed_abpmean", "subject_id",
-                                "imputed_abpsys_abpdias", "imputed_age", 
-                                "imputed_sofa", "imputed_sapsi", "imputed_bmi"),
-                   cols_num = c("age", "sapsi_first","sofa_first", "hr", "spo2", 
-                                "abpsys", "abpdias","abpmean", "bmi"))
 
-mimic_ids <- mimic %>%
-  dplyr::group_by(subject_id) %>%
-  dplyr::select(abpmean) %>%
-  summarise_each(funs(n_distinct))
-mimic_ids_bad <- dplyr::filter(mimic_ids, abpmean == 1)
-mimic_distinct <- mimic[!(mimic$subject_id %in% mimic_ids_bad$subject_id),]
+############################## final touches and save ##########################
+cols_fac <- c("gender", "care_unit", "admission_type_descr", "amine", 
+              "sedation", "ventilation", "rank_icu", "subject_id", 
+              "abpdias_locf", "abpsys_locf", "abpmean_locf", "spo2_locf", 
+              "hr_locf")
+cols_num <- c("age", "sapsi_first","sofa_first", "hr", "spo2", "abpsys", 
+              "abpdias","abpmean", "bmi", "min_elapsed")
+dat <- data.frame(df)
+cols_all <- c(colnames(dat))
+dat[cols_all] <- lapply(dat[cols_all], as.character)
+dat[cols_num] <- lapply(dat[cols_num], as.numeric)
+dat[cols_fac] <- lapply(dat[cols_fac], as.factor)
 
-mimic_all <- mimic_distinct[order(mimic_distinct$subject_id, 
-                                  mimic_distinct$time_and_date), ]
-save(mimic_all, file = here::here("Data","mimic_all.Rdata"), compress = TRUE)
+mimic <- dat[order(dat$subject_id, dat$time_and_date), ]
+mimic <- mimic[,c(1,3,15,4,13,5,10,6,9,7,11,8,12,16:26)]
+colnames(mimic)[18] <- "sex"
+
+length(unique(mimic$subject_id)) # 1153
+
+save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
