@@ -46,7 +46,7 @@ combine_SL = function(train_all, outcome, t, stack_pool, stack_individual,
                       h = 15, test_size = 15, mini_batch = 15, 
                       first_window = 15, window_size = 15, gap_training = 30,
                       convex = TRUE, discrete = FALSE, outcome_summary=FALSE, 
-                      adapt_covs=NULL){
+                      adapt_covs=NULL, historical_fit=NULL){
   
   #Combine time-varying and baseline covariates
   covars_wbaseline <- c(covars, covars_baseline)
@@ -114,13 +114,31 @@ combine_SL = function(train_all, outcome, t, stack_pool, stack_individual,
     global_SL_t_reg<-global_SL(train_all=train_all, t=t, outcome=outcome, 
                                stack_pool=stack_pool, stack_screen=stack_screen,
                                covars=covars, covars_wbaseline=covars_wbaseline,
-                               test_size=test_size, cv="folds_vfold", V=10)
+                               test_size=test_size, cv="folds_vfold", V=5)
     ### Create individual SLs for all samples:
     individual_SL_t <- lapply(samples, function(x){
       individual_SL(train_all=train_all,t=t,id=x,cv=cv,first_window=first_window,
                     window_size=window_size, test_size=test_size,
-                    mini_batch=mini_batch,covars=covars,
+                    mini_batch=mini_batch,covars=covars_wbaseline,
                     stack_individual=stack_individual, gap=gap_training)})
+    if(!is.null(historical_fit)){
+      
+      hist_preds <- list() #Eh
+      for(i in 1:length(individual_SL_t)){
+        
+        folds<-individual_SL_t[[i]]$folds
+        training_task<-individual_SL_t[[i]]$task
+        
+        hist_preds[[i]] <- bind_rows(lapply(folds, function(fold) {
+          test_set_in_training_task <- validation_task(training_task, fold)
+          hist_fits <- cbind.data.frame(lapply(historical_fit, function(fit){
+            fit$predict_fold(test_set_in_training_task, "full")
+          }))
+        }))
+      }
+      
+      learner_names_historical<-colnames(hist_preds[[1]])
+    }
     
   }
  
@@ -139,71 +157,150 @@ combine_SL = function(train_all, outcome, t, stack_pool, stack_individual,
   ##############################################################
   
   if(!is.null(stack_screen)){
-    learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
-                paste("GlobalSL_baseline", learner_names_global, sep="_"),
-                paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
-                paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"),
-                paste("IndividualSL", learner_names_individual, sep="_")) 
-    
-    learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
-                    paste("GlobalSL_baseline", learner_names_global, sep="_"),
-                    paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
-                    paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"))
-    
-    learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
-    
-    #For sample i, get predictions:
-    preds <- lapply(seq_len(n), function(i){
-      ps<-cbind.data.frame(global_SL_t$preds_globalSL[[i]],
-                           global_SL_t$preds_globalSL_baseline[[i]],
-                           global_SL_t$preds_globalSL_screen[[i]],
-                           global_SL_t$preds_globalSL_screen_baseline[[i]],
-                           individual_SL_t[[i]]$preds_individualSL)
-      names(ps)<-learners
-      t(ps)})
-    
-    preds_reg <- lapply(seq_len(n), function(i){
-      ps<-cbind.data.frame(global_SL_t_reg$preds_globalSL[[i]],
-                           global_SL_t_reg$preds_globalSL_baseline[[i]],
-                           global_SL_t_reg$preds_globalSL_screen[[i]],
-                           global_SL_t_reg$preds_globalSL_screen_baseline[[i]])
-      names(ps)<-learners_reg
-      t(ps)})
-    
-    preds_individual <- lapply(seq_len(n), function(i){
-      ps<-individual_SL_t[[i]]$preds_individualSL
-      names(ps)<-learners_individual
-      t(ps)
-    })
+    #No historical data, with screeners
+    if(is.null(historical_fit)){
+      learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                  paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                  paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
+                  paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"),
+                  paste("IndividualSL", learner_names_individual, sep="_")) 
+      
+      learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                      paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                      paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
+                      paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"))
+      
+      learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
+      
+      #For sample i, get predictions:
+      preds <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t$preds_globalSL[[i]],
+                             global_SL_t$preds_globalSL_baseline[[i]],
+                             global_SL_t$preds_globalSL_screen[[i]],
+                             global_SL_t$preds_globalSL_screen_baseline[[i]],
+                             individual_SL_t[[i]]$preds_individualSL)
+        names(ps)<-learners
+        t(ps)})
+      
+      preds_reg <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t_reg$preds_globalSL[[i]],
+                             global_SL_t_reg$preds_globalSL_baseline[[i]],
+                             global_SL_t_reg$preds_globalSL_screen[[i]],
+                             global_SL_t_reg$preds_globalSL_screen_baseline[[i]])
+        names(ps)<-learners_reg
+        t(ps)})
+      
+      preds_individual <- lapply(seq_len(n), function(i){
+        ps<-individual_SL_t[[i]]$preds_individualSL
+        names(ps)<-learners_individual
+        t(ps)
+      })
+    #With historical data, with screeners
+    }else{
+      learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                  paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                  paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
+                  paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"),
+                  paste("IndividualSL", learner_names_individual, sep="_"),
+                  paste("HistoricalSL", learner_names_historical, sep="_")) 
+      
+      learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                      paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                      paste("GlobalSL_screen", learner_names_global_screen, sep="_"),
+                      paste("GlobalSL_screenbaseline", learner_names_global_screen, sep="_"))
+      
+      learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
+      
+      #For sample i, get predictions:
+      preds <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t$preds_globalSL[[i]],
+                             global_SL_t$preds_globalSL_baseline[[i]],
+                             global_SL_t$preds_globalSL_screen[[i]],
+                             global_SL_t$preds_globalSL_screen_baseline[[i]],
+                             individual_SL_t[[i]]$preds_individualSL,
+                             hist_preds[[i]])
+        names(ps)<-learners
+        t(ps)
+        print(i)})
+      
+      preds_reg <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t_reg$preds_globalSL[[i]],
+                             global_SL_t_reg$preds_globalSL_baseline[[i]],
+                             global_SL_t_reg$preds_globalSL_screen[[i]],
+                             global_SL_t_reg$preds_globalSL_screen_baseline[[i]])
+        names(ps)<-learners_reg
+        t(ps)})
+      
+      preds_individual <- lapply(seq_len(n), function(i){
+        ps<-individual_SL_t[[i]]$preds_individualSL
+        names(ps)<-learners_individual
+        t(ps)
+      })
+    }
+  ##No screeners
   }else{
-    learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
-                paste("GlobalSL_baseline", learner_names_global, sep="_"),
-                paste("IndividualSL", learner_names_individual, sep="_"))
-    
-    learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
-                    paste("GlobalSL_baseline", learner_names_global, sep="_"))
-    
-    learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
-    
-    #For sample i, get predictions:
-    preds <- lapply(seq_len(n), function(i){
-      ps<-cbind.data.frame(global_SL_t$globalSL_preds[[i]],
-                           global_SL_t$globalSL_baseline_preds[[i]],
-                           individual_SL_t[[i]]$preds_individualSL)
-      names(ps)<-learners
-      t(ps)})
-    
-    preds_reg <- lapply(seq_len(n), function(i){
-      ps<-cbind.data.frame(global_SL_t_reg$globalSL_preds[[i]],
-                           global_SL_t_reg$globalSL_baseline_preds[[i]])
-      names(ps)<-learners_reg
-      t(ps)})
-    
-    preds_individual <- lapply(seq_len(n), function(i){
-      ps<-individual_SL_t[[i]]$preds_individualSL
-      names(ps)<-learners_individual
-      t(ps)
-    })
+    if(is.null(historical_fit)){
+      learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                  paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                  paste("IndividualSL", learner_names_individual, sep="_"))
+      
+      learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                      paste("GlobalSL_baseline", learner_names_global, sep="_"))
+      
+      learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
+      
+      #For sample i, get predictions:
+      preds <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t$globalSL_preds[[i]],
+                             global_SL_t$globalSL_baseline_preds[[i]],
+                             individual_SL_t[[i]]$preds_individualSL)
+        names(ps)<-learners
+        t(ps)})
+      
+      preds_reg <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t_reg$globalSL_preds[[i]],
+                             global_SL_t_reg$globalSL_baseline_preds[[i]])
+        names(ps)<-learners_reg
+        t(ps)})
+      
+      preds_individual <- lapply(seq_len(n), function(i){
+        ps<-individual_SL_t[[i]]$preds_individualSL
+        names(ps)<-learners_individual
+        t(ps)
+      })
+    }else{
+      learners<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                  paste("GlobalSL_baseline", learner_names_global, sep="_"),
+                  paste("IndividualSL", learner_names_individual, sep="_"), 
+                  paste("HistoricalSL", learner_names_historical, sep="_")
+                  )
+      
+      learners_reg<-c(paste("GlobalSL", learner_names_global, sep="_"),
+                      paste("GlobalSL_baseline", learner_names_global, sep="_"))
+      
+      learners_individual<-(paste("IndividualSL", learner_names_individual, sep="_"))
+      
+      #For sample i, get predictions:
+      preds <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t$globalSL_preds[[i]],
+                             global_SL_t$globalSL_baseline_preds[[i]],
+                             individual_SL_t[[i]]$preds_individualSL,
+                             hist_preds[[i]])
+        names(ps)<-learners
+        t(ps)})
+      
+      preds_reg <- lapply(seq_len(n), function(i){
+        ps<-cbind.data.frame(global_SL_t_reg$globalSL_preds[[i]],
+                             global_SL_t_reg$globalSL_baseline_preds[[i]])
+        names(ps)<-learners_reg
+        t(ps)})
+      
+      preds_individual <- lapply(seq_len(n), function(i){
+        ps<-individual_SL_t[[i]]$preds_individualSL
+        names(ps)<-learners_individual
+        t(ps)
+      })
+    }
   }
   
   ##############################################################

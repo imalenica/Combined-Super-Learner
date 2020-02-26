@@ -200,7 +200,7 @@ predict_fun = function(SL,task,list=TRUE,
     if(cv=="folds_rolling_origin" | cv=="folds_rolling_window"){
       #Switch back to sample ids, but can specify id=seq(1:n) if prefer
       #(subject id X test times) X num of folds
-      id = rep(ids,each=length(SL$fit_object$folds)*test_size)
+      id = rep(ids,each=length(SL$training_task$folds)*test_size)
     }else if(cv=="folds_vfold"){
       #More problematic, does not correspond with samples any more
       time <- nrow(task$data)/length(ids)
@@ -222,7 +222,7 @@ truth_fun = function(cv, folds, test_data, outcome="hypo_event", validation_trut
       truth<-bind_rows(lapply(folds, function(i) test_data[i$validation_set,]))
     }else if(cv=="folds_vfold"){
       #CAUTION: Not ordered correctly, however! 
-      truth<-test_data[,outcome]
+      truth<-data.frame(Y=test_data[,outcome])
       id = rep(ids, each=nrow(truth)/length(unique(test_data$subject_id)))
     }
   }else{
@@ -232,7 +232,7 @@ truth_fun = function(cv, folds, test_data, outcome="hypo_event", validation_trut
       id = as.numeric(levels(truth$subject_id))[truth$subject_id]
     }else if(cv=="folds_vfold"){
       #CAUTION: Not ordered correctly, however! 
-      truth<-test_data[,outcome]
+      truth<-data.frame(Y=test_data[,outcome])
       id = rep(ids, each=nrow(truth)/length(unique(test_data$subject_id)))
     }
   }
@@ -250,7 +250,7 @@ truth_fun = function(cv, folds, test_data, outcome="hypo_event", validation_trut
 
 #Good idea to have mini_batch=test_size...
 global_SL = function(train_all, t, outcome, sl, stack_pool, stack_screen=NULL, 
-                     covars, covars_wbaseline, test_size, mini_batch=1, V=NULL,
+                     covars, covars_wbaseline, test_size, mini_batch=1, V=5,
                      cv, first_window=1, window_size=1, gap=1){
   
   #### Pool across time (fitting on all data up to time t)
@@ -259,36 +259,45 @@ global_SL = function(train_all, t, outcome, sl, stack_pool, stack_screen=NULL,
   test_data <- train_all[train_all$time<=t,]
   ids=seq(1:length(unique(test_data$subject_id)))
   
-  #Set up proper cross-validation for multiple time-series data:
-  if(cv=="folds_rolling_origin"){
-    folds <- origami::make_folds(test_data,
-                                 fold_fun = folds_rolling_origin_pooled,
-                                 t=t,
-                                 first_window = first_window,
-                                 validation_size = test_size, gap = gap,
-                                 batch = mini_batch)
-  }else if(cv=="folds_rolling_window"){
-    folds <- origami::make_folds(test_data,
-                                 fold_fun = folds_rolling_window_pooled,
-                                 t=t,
-                                 window_size = window_size,
-                                 validation_size = test_size, gap = gap,
-                                 batch = mini_batch)
-  }else if(cv=="folds_vfold"){
+  #Check if we have data for all samples 
+  #(requirment of some time-series CVs)
+  if(nrow(test_data)!=length(ids)*t){
+    #Set up only V fold CV
     folds <- origami::make_folds(test_data,
                                  fold_fun = folds_vfold,
                                  V=V)
+  }else{
+    #Set up proper cross-validation for multiple time-series data:
+    if(cv=="folds_rolling_origin"){
+      folds <- origami::make_folds(test_data,
+                                   fold_fun = folds_rolling_origin_pooled,
+                                   t=t,
+                                   first_window = first_window,
+                                   validation_size = test_size, gap = gap,
+                                   batch = mini_batch)
+    }else if(cv=="folds_rolling_window"){
+      folds <- origami::make_folds(test_data,
+                                   fold_fun = folds_rolling_window_pooled,
+                                   t=t,
+                                   window_size = window_size,
+                                   validation_size = test_size, gap = gap,
+                                   batch = mini_batch)
+    }else if(cv=="folds_vfold"){
+      folds <- origami::make_folds(test_data,
+                                   fold_fun = folds_vfold,
+                                   V=V)
+    }
   }
   
   # create the sl3 task with time-varying covariates:
   if(!is.null(covars)){
     task <- make_sl3_Task(
       data = test_data, covariates = covars,
-      outcome = outcome, folds=folds)
+      outcome = outcome, folds=folds, drop_missing_outcome = T)
     
     #Fit the global learner:
     globalSL<-stack_pool$train(task)
-    globalSL_preds<-predict_fun(SL=globalSL, task=task, cv=cv, ids=ids, test_size=test_size)
+    globalSL_preds<-predict_fun(SL=globalSL, task=task, cv=cv, ids=ids, test_size=test_size) #per individual
   }else{
     task<-NULL
     globalSL<-NULL
@@ -299,7 +308,7 @@ global_SL = function(train_all, t, outcome, sl, stack_pool, stack_screen=NULL,
   if(!is.null(covars_wbaseline)){
     task_baseline <- make_sl3_Task(
       data = test_data, covariates = covars_wbaseline,
-      outcome = outcome, folds=folds)
+      outcome = outcome, folds=folds, drop_missing_outcome = T)
     
     #Fit the global learner:
     globalSL_baseline<-stack_pool$train(task_baseline)
@@ -349,9 +358,9 @@ global_SL = function(train_all, t, outcome, sl, stack_pool, stack_screen=NULL,
   }
   
   #Get truths (validation):
-  truths<-truth_fun(cv=cv, folds=folds, test_data=test_data, ids=ids, test_size=test_size)
+  truths<-truth_fun(cv=cv, folds=folds, test_data=test_data, ids=ids, test_size=test_size, outcome=outcome)
   truths_training<-truth_fun(cv=cv, folds=folds, test_data=test_data, ids=ids, test_size=test_size, 
-                             validation_truth=FALSE)
+                             validation_truth=FALSE, outcome=outcome)
   return(list(t=t,
               #Save SL fits 
               regularSL=regularSL,
