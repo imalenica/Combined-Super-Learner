@@ -378,25 +378,51 @@ df$care_unit <- ifelse(df$care_unit == "1", "MICU",
                                      ifelse(df$care_unit == "5", "NICU",
                                             ifelse(df$care_unit == "6", "CCU", 
                                                    NA)))))
+df_update <- df %>%
+  group_by(subject_id) %>%
+  mutate(init_time_and_date = min(time_and_date)) %>%
+  mutate(min_elapsed = as.integer((time_and_date - init_time_and_date) / 60) + 1)
 
-
-############################## final touches and save ##########################
+############################## format column classes ##########################
 cols_fac <- c("gender", "care_unit", "admission_type_descr", "amine", 
               "sedation", "ventilation", "rank_icu", "subject_id", 
               "abpdias_locf", "abpsys_locf", "abpmean_locf", "spo2_locf", 
               "hr_locf")
 cols_num <- c("age", "sapsi_first","sofa_first", "hr", "spo2", "abpsys", 
               "abpdias","abpmean", "bmi", "min_elapsed")
-dat <- data.frame(df)
-cols_all <- c(colnames(dat))
+dat <- data.frame(df_update)
+cols_all <- c(colnames(dat)[-3])
 dat[cols_all] <- lapply(dat[cols_all], as.character)
 dat[cols_num] <- lapply(dat[cols_num], as.numeric)
 dat[cols_fac] <- lapply(dat[cols_fac], as.factor)
 
-mimic <- dat[order(dat$subject_id, dat$time_and_date), ]
+############## for now -- remove subjects with duplicated min elapsed ##########
+drop_for_now <- list()
+for(i in 1:length(unique(dat$subject_id))){
+  s <- unique(dat$subject_id)[i]
+  d <- dplyr::filter(dat, subject_id == s)
+  n_occur <- data.frame(table(d$min))
+  if(any(n_occur$Freq > 1)){
+    # min_occur <- which(n_occur$Freq > 1)
+    # if(any(diff(min_occur)) > 1){
+      drop_for_now[[i]] <- as.character(s)
+      print(as.character(s))
+  #   } else {
+  #     last <- d[(min(min_occur)-1), "sec"] # keep duplicate w same second term
+  #     ahead <- d[(max(min_occur)+1), "sec"]
+  #     for(j in 1:length(min_occur)){
+  #
+  # }
+  }
+}
+
+bad_subjects_for_now <- unlist(drop_for_now)
+mimic <- dat[!(dat$subject_id %in% bad_subjects_for_now),]
+length(bad_subjects_for_now) #36
+
+mimic <- mimic[order(mimic$subject_id, mimic$time_and_date), ]
 mimic <- mimic[,c(1,3,15,4,13,5,10,6,9,7,11,8,12,16:26)]
 colnames(mimic)[18] <- "sex"
 
-length(unique(mimic$subject_id)) # 1153
-
+length(unique(mimic$subject_id)) # 1117
 save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
