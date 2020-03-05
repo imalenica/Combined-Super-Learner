@@ -425,4 +425,5 @@ mimic <- mimic[,c(1,3,15,4,13,5,10,6,9,7,11,8,12,16:26)]
 colnames(mimic)[18] <- "sex"
 
 length(unique(mimic$subject_id)) # 1117
+mimic <- droplevels(mimic)
 save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
