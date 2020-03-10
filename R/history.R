@@ -2,6 +2,7 @@ library(tidyverse)
 library(data.table)
 library(here)
 library(doParallel)
+library(compare)
 
 load(here::here("Data","mimic.Rdata"))
 
@@ -56,9 +57,11 @@ save(mimic_outcome, file = here("Data", "mimic_outcome.Rdata"), compress = TRUE)
 
 ########### add time series summaries / history to current time data ###########
 
+load(here("Data", "mimic_outcome.Rdata"))
+data <- mimic_outcome
 ### for time-varying binary variables, we may be interested in on/off switch:
 # (1) identify min when trt was switched, and 
-# (2) if it was a switch on trt (diff=0-1=-1) or off trt (diff=1-0=1)
+# (2) if it was a switch on trt (diff=1-0=1) or off trt (diff=0-1=-1)
 
 data$amine <- as.numeric(data$amine)-1
 data$sedation <- as.numeric(data$sedation)-1
@@ -80,7 +83,7 @@ dat_trt <- data %>%
          sedation, sedation_switch1, sedation_switch0,
          ventilation, ventilation_switch1, ventilation_switch0)
 
-dat_full <- left_join(data, dat_trt)
+dat_full <- data.table(left_join(data, dat_trt))
 dat <- dat_full[order(dat_full$subject_id, dat_full$time_and_date), ]
 
 ##### time-varying binary trt summaries
@@ -144,61 +147,46 @@ add_history_binary <- function(ind_data, min_history){
     sed <- summarize_history_binary(history$sedation, history$sedation_switch1, 
                                     history$sedation_switch0, current$min_elapsed,
                                     "sedation_history_")
-    vent <- summarize_history_binary(history$ventilation, history$ventilation_switch1, 
+    vent <- summarize_history_binary(history$ventilation, history$ventilation_switch1,
                                      history$ventilation_switch0, current$min_elapsed,
                                      "ventilation_history_")
-    current_history_binary[[i]] <- c(current, amine, sed, vent)
+    current_history_binary[[i]] <- data.frame(current, t(amine), t(sed), t(vent))
   }
   df <- do.call(rbind, current_history_binary)
-  left_join(return_obj, dat_ordered[1,])
-  return(return_obj)
+  return_df <- suppressMessages(full_join(dat_ordered[1,], df))
+  return(return_df)
 }
 
-add_history_binary <- function(ind_data, min_history){
-  dat_ordered <- ind_data[order(ind_data$time_and_date), ]
-  
-  current_history_binary <- list()
-  for(i in 2:nrow(dat_ordered)){
-    history_full <- dat_ordered[c(1:(i-1)),]
-    # subset to history if i > min_history
-    if(i <= min_history){
-      history <- history_full
-    } else {
-      history <- history_full[c(
-        (nrow(history_full)-min_history+1):(nrow(history_full))),]
-    }
-    current <- dat_ordered[i,]
-    amine <- summarize_history_binary(history$amine, history$amine_switch1, 
-                                      history$amine_switch0, current$min_elapsed,
-                                      "amine_history_")
-    sed <- summarize_history_binary(history$sedation, history$sedation_switch1, 
-                                    history$sedation_switch0, current$min_elapsed,
-                                    "sedation_history_")
-    vent <- summarize_history_binary(history$ventilation, history$ventilation_switch1, 
-                                     history$ventilation_switch0, current$min_elapsed,
-                                     "ventilation_history_")
-    current_history_binary[[i]] <- c(current, amine, sed, vent)
-  }
-  df <- do.call(rbind, current_history_binary)
-  left_join(return_obj, dat_ordered[1,])
-  return(return_obj)
-}
-
+ptm <- proc.time()
 N <- length(unique(dat$subject_id))
 registerDoParallel(cores = (detectCores()-1)) # set up parallelization
 getDoParWorkers() 
 binary_history_list <- foreach(n = 1:N) %dopar% {
-  id <- dat$subject_id[N]
+  id <- levels(dat$subject_id)[n]
   ind_dat <- dplyr::filter(dat, subject_id == id)
   
   # considering history as past 30 min and past 60 min
-  history60 <- add_history_binary(ind_dat, 30)
-  history30 <- add_history_binary(ind_dat, 60)
+  history30 <- add_history_binary(ind_dat, 30)
+  history60 <- add_history_binary(ind_dat, 60)
   
-  return_list <- list(history60 = history60,
-                      history30 = history30)
+  print(paste0("Finishing subject_id level ", n))
+  
+  return_list <- list(history30 = history30,
+                      history60 = history60)
+  
   return(return_list)
 }
+ptm-proc.time()
 
-binary_history60_all <- do.call(rbind, lapply(binary_history_list, "[[", "history60"))
-binary_history30_all <- do.call(rbind, lapply(binary_history_list, "[[", "history30"))
+binary_history60 <- do.call(rbind, lapply(binary_history_list, "[[", "history60"))
+binary_history30 <- do.call(rbind, lapply(binary_history_list, "[[", "history30"))
+
+comparison30 <- compare(binary_history30[,c(1:28)], dat, allowAll = TRUE)
+comparison30$result
+comparison60 <- compare(binary_history60[,c(1:28)], dat, allowAll = TRUE)
+comparison60$result
+
+save(binary_history60, file = here("Data", "binary_history60.Rdata"),
+     compress = TRUE)
+save(binary_history30, file = here("Data", "binary_history30.Rdata"),
+     compress = TRUE)
