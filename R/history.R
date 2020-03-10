@@ -6,7 +6,9 @@ library(compare)
 
 load(here::here("Data","mimic.Rdata"))
 
-############################# add leaded outcome ###############################
+################################################################################
+# add leaded outcome
+################################################################################
 
 dat <- data.table(mimic)
 dat_list <- split(dat, dat$subject_id)
@@ -55,10 +57,13 @@ table(unlist(lapply(added_outcome_list_all, ncol)))
 mimic_outcome <- do.call(rbind, added_outcome_list_all)
 save(mimic_outcome, file = here("Data", "mimic_outcome.Rdata"), compress = TRUE)
 
-########### add time series summaries / history to current time data ###########
+################################################################################
+# add history of BINARY time-varying covariates 
+################################################################################
 
 load(here("Data", "mimic_outcome.Rdata"))
 data <- mimic_outcome
+
 ### for time-varying binary variables, we may be interested in on/off switch:
 # (1) identify min when trt was switched, and 
 # (2) if it was a switch on trt (diff=1-0=1) or off trt (diff=0-1=-1)
@@ -190,3 +195,10 @@ save(binary_history60, file = here("Data", "binary_history60.Rdata"),
      compress = TRUE)
 save(binary_history30, file = here("Data", "binary_history30.Rdata"),
      compress = TRUE)
+
+################################################################################
+# add history of CONTINUOUS time-varying covariates 
+################################################################################
+
+load(file = here("Data", "binary_history30.Rdata"))
+load(file = here("Data", "binary_history60.Rdata"))
