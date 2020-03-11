@@ -14,6 +14,9 @@ dat <- data.table(mimic)
 dat_list <- split(dat, dat$subject_id)
 registerDoParallel(cores = (detectCores()-1))
 getDoParWorkers()
+
+##############################################
+
 added_outcome_list_all <- foreach(n = 1:length(dat_list)) %dopar% {
   x <- dat_list[[n]]
   added_outcome_list <- list()
@@ -92,6 +95,7 @@ dat_full <- data.table(left_join(data, dat_trt))
 dat <- dat_full[order(dat_full$subject_id, dat_full$time_and_date), ]
 
 ##### time-varying binary trt summaries
+
 summarize_history_binary <- function(history_indicator_vector,
                                      history_switch1_time_vector,
                                      history_switch0_time_vector,
@@ -199,6 +203,140 @@ save(binary_history30, file = here("Data", "binary_history30.Rdata"),
 ################################################################################
 # add history of CONTINUOUS time-varying covariates 
 ################################################################################
+library(tsibble)
+library(vrtest)
+library(feasts)
+
+#Relevant functions
+summarize_history_continuous <- function(history, current, var="abpsys"){
+  
+  hist <- nrow(history)
+  
+  full_data <- rbind.data.frame(history, current)
+  full_data <- full_data[order((hist+1):1),]
+  
+  #Basic statistics:
+  sum_hist <- unclass(summary(history[,var]))
+  sum_hist_names <- c("Min","1stQ","Median","Mean","3rdQ","Max")
+  names(sum_hist) <- paste0(var, "_", sum_hist_names)
+  
+  #Is the history stationary (Variance Ratio Test)
+  #stat <- vrtest::Auto.VR(history[,var])[[1]]
+  #names(stat) <- paste0(var, "_stationary")
+  
+  #Time-series tools
+  history_ts <- as_tsibble(history, index=min_elapsed)
+  full_data_ts<-as_tsibble(full_data, index=min_elapsed)
+  
+  #Autocorrelation
+  if(nrow(full_data_ts) < 3){
+    acfs <- rep(NA, 10)
+  }else{
+    acfs <- full_data_ts %>% ACF(abpsys, lag_max=10)
+    acfs <- acfs$acf
+  }
+  
+  if(length(acfs)<10){
+    acfs <- c(acfs, rep(NA, 10-length(acfs)))
+  }
+  
+  names_acf <- paste0(var, "_acf_lag", seq(10))
+  names(acfs) <- names_acf
+  
+  #Extract time-series features:
+  #1) Features related to STL decomposition of the series (strength of trend, seasonality)
+  #2) Spectral entropy of a time-series
+  #3) Number of flat points
+  #4) Hurst coefficient (level of fractional differencing of a series)
+  
+  all_names_features <- c("trend_strength","spikiness","linearity","curvature","stl_e_acf1",     
+                      "stl_e_acf10","spectral_entropy","n_flat_spots","coef_hurst")
+  all_names_features <- paste0(var, "_", all_names_features)
+  
+  if(nrow(history_ts) == 1){
+    features_ts <- rep(NA, 9)
+    features_ts <- data.frame(t(features_ts))
+    names(features_ts) <- all_names_features
+  }else{
+    features_ts <- suppressWarnings(history_ts %>% 
+                                      features(abpsys, list(feat_stl, feat_spectral, 
+                                                            n_flat_spots, coef_hurst))) 
+    names_features <- names(features_ts)  
+    names(features_ts) <- paste0(var, "_", names_features)
+    
+  }
+  
+  #Check all worked
+  if(length(features_ts) != 9){
+    Missing <- setdiff(all_names_features, names(features_ts))
+    features_ts[Missing] <- NA
+    features_ts <- features_ts[,all_names_features]
+  }
+  
+  return(cbind(t(sum_hist), t(acfs), features_ts))
+}
+
+add_history_continuous <- function(ind_data, min_history){
+  dat_ordered <- ind_data[order(ind_data$time_and_date), ]
+  
+  current_history <- list()
+  for(i in 2:nrow(dat_ordered)){
+    history_full <- dat_ordered[c(1:(i-1)),]
+    # subset to history if i > min_history
+    if(i <= min_history){
+      history <- history_full
+    } else {
+      history <- history_full[c(
+        (nrow(history_full)-min_history+1):(nrow(history_full))),]
+    }
+    current <- dat_ordered[i,]
+    
+    abpsys <- summarize_history_continuous(history=history, current=current, var="abpsys")
+    abpdias <- summarize_history_continuous(history=history, current=current, var="abpdias")
+    abpmean <- summarize_history_continuous(history=history, current=current, var="abpmean")
+    spo2 <- summarize_history_continuous(history=history, current=current, var="spo2")
+    
+    current_history[[i]] <- data.frame(current, abpsys, abpdias, abpmean, spo2)
+  }
+  df <- do.call(rbind, current_history)
+  return_df <- suppressMessages(full_join(dat_ordered[1,], df))
+  return(return_df)
+}
 
 load(file = here("Data", "binary_history30.Rdata"))
 load(file = here("Data", "binary_history60.Rdata"))
+
+#Add to 30 and 60 min summary
+N <- length(unique(binary_history30$subject_id))
+registerDoParallel(cores = (detectCores()-1)) # set up parallelization
+getDoParWorkers() 
+
+continuous_history_list <- foreach(n = 1:N) %dopar% {
+  id <- levels(binary_history30$subject_id)[n]
+  ind_dat_30 <- dplyr::filter(binary_history30, subject_id == id)
+  ind_dat_60 <- dplyr::filter(binary_history60, subject_id == id)
+  
+  # considering history as past 30 min and past 60 min
+  history30 <- add_history_continuous(ind_dat_30, 30)
+  history60 <- add_history_continuous(ind_dat_60, 60)
+  
+  print(paste0("Finishing subject_id level ", n))
+  
+  return_list <- list(history30 = history30,
+                      history60 = history60)
+  
+  return(return_list)
+}
+
+cont_30<-continuous_history_list[[1]]$history30
+cont_60<-continuous_history_list[[1]]$history60
+
+#Look at the ACF
+acf_60<-cbind.data.frame(abpsys=colMeans(cont_60[,68:77], na.rm = TRUE), 
+                         abpdias=colMeans(cont_60[,93:102], na.rm = TRUE),
+                         abpmean=colMeans(cont_60[,118:127], na.rm = TRUE))
+colMeans(cont_60[,143:152], na.rm = TRUE) #SPO2 
+
+  
+
+
