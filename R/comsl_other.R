@@ -76,7 +76,7 @@ make_historical_fit <- function(historical_data, outcome, covariates, id,
 
 make_adapt_sl <- function(individual_training_data, indiviual_forecast_data, 
                           outcome, covariates, subject_id, historical_fit, 
-                          individual_stack = NULL, past_individual_fit = NULL){
+                          individual_stack = NULL, past_individual_fit = NULL, acf=FALSE){
   
   # TODO: ensure individual task nodes = historical task nodes, 
   #       update loss and weights w/o recalculating,
@@ -106,7 +106,8 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
     data = individual_training_data, 
     covariates = covariates,
     outcome = outcome, 
-    folds = folds
+    folds = folds, 
+    drop_missing_outcome = TRUE
     )
   
   # fit initial superlearner if past_individual_fit is not provided
@@ -173,6 +174,44 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   sl_weights <- rbind(weights_discrete, weights_nnls_convex, weights_nnls)
   colnames(sl_weights) <- names(training_preds)
   
+  # use sl weights for prediction with sl
+  pred_discrete <- as.matrix(training_preds) %*% weights_discrete
+  pred_nnls_convex <- as.matrix(training_preds) %*% weights_nnls_convex
+  pred_nnls <- as.matrix(training_preds) %*% weights_nnls
+  sl_pred <- data.frame(pred_discrete, pred_nnls_convex, pred_nnls)
+  colnames(sl_pred) <- c("discreteSL", "nnls_convexSL", "nnls_SL")
+  
+  #Get the residuals:
+  residuals <- apply(sl_pred, 2, function(pred) (pred-truth))
+  
+  #Check dependence:
+  if(acf){
+    residuals <- cbind.data.frame(residuals, time=seq(1:nrow(residuals)))
+    residuals <- tsibble::as_tsibble(residuals, index=time)
+ 
+    acfs_discreteSL <- residuals %>% feasts::ACF(discreteSL, lag_max=nrow(residuals))
+    acfs_nnls_convexSL <- residuals %>% feasts::ACF(nnls_convexSL, lag_max=nrow(residuals))
+    acfs_nnls_SL <- residuals %>% feasts::ACF(nnls_SL, lag_max=nrow(residuals))
+
+    acfs=cbind.data.frame(acfs_discreteSL,acfs_nnls_convexSL[,2],acfs_nnls_SL[,2])
+    names(acfs) <- c("lag", "acfs_discreteSL", "acfs_nnls_convexSL", 
+                     "acfs_nnls_SL")
+    
+    sig_acfs <- qnorm((1 + 0.95)/2)/sqrt(sum(!is.na(residuals[,1])))
+    
+    min.true <- function(x){
+      min(which(x==!TRUE))-1
+    }
+    
+    lags <- cbind.data.frame(lag_abpsys=min.true((acfs$acfs_discreteSL > sig_acfs)),
+                             lag_abpdias=min.true((acfs$acfs_nnls_convexSL > sig_acfs)),
+                             lag_abpmean=min.true((acfs$acfs_nnls_SL > sig_acfs)))
+  }else{
+    lags <- cbind.data.frame(lag_abpsys=NA,
+                             lag_abpdias=NA,
+                             lag_abpmean=NA)
+  }
+
   ############################ forecast with SLs ###############################
   
   # avoid issues with NA as outcome when outcome hasn't yet been observed
@@ -211,7 +250,8 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
                       individual_fit = ind_fit, 
                       historical_fit = historical_fit,
                       training_preds = training_preds,
-                      loss = loss)
+                      loss = loss, 
+                      lags=lags)
   
   return(return_list)
 }
