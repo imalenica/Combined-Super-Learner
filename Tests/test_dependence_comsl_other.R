@@ -98,7 +98,8 @@ result_list[[1]] <- make_adapt_sl(
   covariates = all_covs, 
   subject_id = ind_sample,
   historical_fit = historical_fit,
-  individual_stack = individual_stack
+  individual_stack = individual_stack,
+  acf=TRUE
 )
 
 result_list[[2]] <- make_adapt_sl(
@@ -108,7 +109,8 @@ result_list[[2]] <- make_adapt_sl(
   covariates = all_covs, 
   subject_id = ind_sample,
   historical_fit = historical_fit,
-  individual_stack = individual_stack
+  individual_stack = individual_stack,
+  acf=TRUE
 )
 
 
