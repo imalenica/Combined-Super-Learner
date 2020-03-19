@@ -402,4 +402,33 @@ continuous_history_list <- foreach(n = 1:N) %dopar% {
   return(return_list)
 }
 
+return_list_30<-list()
+return_list_60<-list()
+for(n in 157:N){
+  id <- levels(binary_history30$subject_id)[n]
+  ind_dat_30 <- dplyr::filter(binary_history30, subject_id == id)
+  ind_dat_60 <- dplyr::filter(binary_history60, subject_id == id)
+  
+  # considering history as past 30 min and past 60 min
+  history30 <- add_history_continuous(ind_dat_30, 30)
+  history60 <- add_history_continuous(ind_dat_60, 60)
+  
+  print(paste0("Finishing subject_id level ", n))
+  
+  return_list_30[[n]] <- history30
+  return_list_60[[n]] <- history60
+}
 
+
+save(return_list_30, file = here("Data", "return_list_30.Rdata"),
+     compress = TRUE)
+save(return_list_60, file = here("Data", "return_list_60.Rdata"),
+     compress = TRUE)
+
+fin_history60 <- do.call(rbind, return_list_60)
+fin_history30 <- do.call(rbind, return_list_30)
+
+save(fin_history30, file = here("Data", "fin_history30.Rdata"),
+     compress = TRUE)
+save(fin_history60, file = here("Data", "fin_history60.Rdata"),
+     compress = TRUE)

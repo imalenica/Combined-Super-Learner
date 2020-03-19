@@ -6,6 +6,8 @@ library(here)
 library(ggplot2)
 library(sl3)
 library(origami)
+library(tsibble)
+library(feasts)
 
 source(here::here("R", "utils_mimic.R"))
 load(here::here("Data", "fin_history30.Rdata"))
@@ -16,8 +18,8 @@ data_60<-fin_history60
 
 ############################### set up learners ###############################
 
-grid_params = list(max_depth = c(2,5,8),
-                   eta = c(0.005, 0.1, 0.25))
+grid_params = list(max_depth = c(5,8),
+                   eta = c(0.1, 0.25))
 grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
 params_default = list(nthread = getOption("sl.cores.learners", 1))
 xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
@@ -33,7 +35,9 @@ sl <- Lrnr_sl$new(learners = learners, metalearner = metalearner)
 
 lrnr_mean <- make_learner(Lrnr_mean)
 lrnr_glm_simple <- make_learner(Lrnr_glm_fast)
-individual_stack <- make_learner(Stack, lrnr_mean, lrnr_glm_simple)
+#individual_stack <- make_learner(Stack, lrnr_mean, lrnr_glm, lrnr_lasso)
+individual_stack <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm, lrnr_lasso),
+                           recursive = TRUE))
 
 #########################################################################
 ########        New Version of the Adaptive Super Learner        ########
@@ -44,7 +48,7 @@ set.seed(4197)
 
 #Randomly sample
 ids <- unique(data_30$subject_id)
-subject_sample <- sample(ids, 40)
+subject_sample <- sample(ids, 30)
 subject_sample_30 <- filter(data_30, subject_id %in% subject_sample)
 subject_sample_60 <- filter(data_60, subject_id %in% subject_sample)
 ind_sample <- sample(ids[!(ids %in% subject_sample)], 1)
@@ -60,7 +64,7 @@ all_covs = c("min_elapsed","abpsys","abpsys_locf",
              "ventilation_history_mean","ventilation_history_switch1_time",
              "abpsys_Min","abpsys_Mean","abpsys_Max",
              "abpsys_trend_strength","abpsys_spikiness","abpsys_linearity","abpsys_curvature",
-             "abpsys_spectral_entropy","abpsys_n_flat_spots","abpsys_coef_hurst",
+             "abpsys_spectral_entropy","abpsys_coef_hurst",
              "abpdias_Min","abpdias_Mean","abpdias_Max",
              "abpdias_trend_strength","abpdias_spikiness","abpdias_linearity","abpdias_curvature",
              "abpdias_spectral_entropy","abpdias_n_flat_spots","abpdias_coef_hurst",

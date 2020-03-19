@@ -56,7 +56,8 @@ make_historical_fit <- function(historical_data, outcome, covariates, id,
   fits <- list(cv_fit = fit,
                sl_nnls = sl_nnls,
                sl_nnls_convex = sl_nnls_convex,
-               sl_discrete = sl_discrete)
+               sl_discrete = sl_discrete,
+               task=task)
   return(fits)
 }
 
@@ -101,14 +102,37 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
                                batch = 5
                                )
 
-  
   training_task <- make_sl3_Task(
     data = individual_training_data, 
     covariates = covariates,
     outcome = outcome, 
-    folds = folds, 
-    drop_missing_outcome = TRUE
+    folds = folds
     )
+  
+  #Issue with mismatch between historical and individual delta column:
+  hist_cols <- names(historical_fit$task$column_names)
+  ind_cols <- names(training_task$column_names)
+  ind_cols_miss <- hist_cols[!(hist_cols %in% ind_cols)]
+  delta_cols <- grep("delta_", ind_cols_miss)
+  
+  if(length(delta_cols)>0){
+    
+    ind_cols_miss_extra <- data.frame(matrix(nrow=nrow(individual_training_data), 
+                                             ncol=length(delta_cols)))
+    
+    ind_cols_miss_extra[,delta_cols] <- rep(0, nrow(individual_training_data))
+    names(ind_cols_miss_extra) <- ind_cols_miss[delta_cols]
+    
+    #training_task$add_columns(ind_cols_miss_extra)
+    ind_train_data_new <- cbind.data.frame(individual_training_data, ind_cols_miss_extra)
+
+    training_task <- make_sl3_Task(
+      data = ind_train_data_new, 
+      covariates = c(covariates, ind_cols_miss),
+      outcome = outcome, 
+      folds = folds
+    )
+  }
   
   # fit initial superlearner if past_individual_fit is not provided
   if(is.null(past_individual_fit) & is.null(individual_stack)) {
@@ -146,9 +170,10 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   # predict with individualized learners and historical learners
   ind_preds <- ind_fit$predict(training_task)
   
+  historical_fits <- historical_fit[1:4]
   hist_preds <- bind_rows(lapply(folds, function(fold) {
     test_set_in_training_task <- validation_task(training_task, fold)
-    hist_fits <- cbind.data.frame(lapply(historical_fit, function(fit){
+    hist_fits <- cbind.data.frame(lapply(historical_fits, function(fit){
       fit$predict_fold(test_set_in_training_task, "full")
     }))
   }))
@@ -168,10 +193,10 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   loss <- apply(training_preds, 2, function(pred) mean((pred-truth)^2))
   
   # establish various super learners
-  weights_discrete <- get_weights(training_preds, truth, loss, convex, discrete = T)
-  weights_nnls_convex <- get_weights(training_preds, truth, loss, convex = T, discrete = F)
-  weights_nnls <- get_weights(training_preds, truth, loss)
-  sl_weights <- rbind(weights_discrete, weights_nnls_convex, weights_nnls)
+  weights_discrete <- suppressWarnings(get_weights(training_preds, truth, loss, convex, discrete = T))
+  weights_nnls_convex <- suppressWarnings(get_weights(training_preds, truth, loss, convex = T, discrete = F))
+  weights_nnls <- suppressWarnings(get_weights(training_preds, truth, loss))
+  sl_weights <- suppressWarnings(rbind(weights_discrete, weights_nnls_convex, weights_nnls))
   colnames(sl_weights) <- names(training_preds)
   
   # use sl weights for prediction with sl
