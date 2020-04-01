@@ -53,7 +53,8 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
     folds = folds
     )
   # issue with mismatch between historical and individual delta column:
-  training_task <- process_task(historical_fit, training_task)
+  training_task <- process_task(individual_training_task=training_task, 
+                                historical_fit=historical_fit)
 
   # fit initial superlearner if past_individual_fit is not provided
   if(is.null(past_individual_fit) & is.null(individual_stack)) {
@@ -62,7 +63,7 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
            to update with new data.")
     stop()
  
-    } else if(is.null(past_individual_fit) & !(is.null(individual_stack))) {
+    }else if(is.null(past_individual_fit) & !(is.null(individual_stack))) {
     
     print(paste0("Training learners for subject ", subject_id, 
                  " with ", nrow(individual_training_data), " observations."))
@@ -79,7 +80,7 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
       ind_fit <- cv_stack$train(training_task)
     }
     
-    } else if(!is.null(past_individual_fit) & is.null(individual_stack)) {
+    }else if(!is.null(past_individual_fit) & is.null(individual_stack)) {
     print(paste0("Updating past fit for subject ", subject_id, " with ", 
                  nrow(individual_training_data), " observations."))
     

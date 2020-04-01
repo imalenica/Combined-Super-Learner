@@ -1,0 +1,610 @@
+---
+title: "Test Combined SL: ARIMA-based simulations"
+author: "Ivana Malenica"
+date: "Spring 2020"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{lscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{float}
+---
+
+# Load packages and data {-}
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+options(warn=-1)
+suppressMessages(library(xtable))
+suppressMessages(library(here))
+suppressMessages(library(pROC))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(reshape2))
+suppressMessages(library(forecast))
+suppressMessages(library(kableExtra))
+suppressMessages(library(sl3))
+suppressMessages(library(origami))
+suppressMessages(library(data.table))
+suppressMessages(library(ck37r))
+options(xtable.comment = FALSE)
+file.sources = list.files(path=here("R/v3/"),pattern="*.R")
+sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
+
+#Load the subset data:
+load(here::here("Data/fin_history60_subset.Rdata"))
+```
+
+\newpage
+
+# Overview {-}
+
+We may be interested in the performance of the Combined Super Learner in case 
+of a nonstationary time-series. In particular, we estimate models for each 
+patient, as well as a "pooled" Arima model for the combination of few individual
+time-series. The idea is that the Combined Super Learner should adjust depending on 
+which part of the time-series we are looking at.
+
+# Prepare the data
+
+We only considered patients that had:
+
+* at least 5 hours of data.
+* no gaps in time.
+
+\vspace{.2in}
+```{r editdata, echo = FALSE, eval=TRUE, message = FALSE, warning = FALSE}
+data <- fin_history60_subset
+
+#Number of samples in the subset:
+#length(unique(data$subject_id))
+
+#Limit data to the first 5 hours
+dat <- data %>%
+  dplyr::group_by(subject_id) %>%
+  dplyr::mutate(time=1:n()) %>%
+  dplyr::filter(min_elapsed <= 300)
+
+#Number of samples in the subset with at least 5 hours of data:
+#length(unique(dat$subject_id))
+
+#Exclude samples with time gaps (can't model with ARIMA)
+dat_no_gap <- dat %>% 
+  dplyr::mutate(time_count = n()) %>%
+  dplyr::filter(time_count == 300)
+
+#Number of samples in the subset with at least 5 hours of data: (263)
+#length(unique(dat_no_gap$subject_id)) 
+
+```
+
+# Create ARIMA models for each patient
+
+Selects the optimal autoregressive and moving average orders $p$ 
+and $q$ based on a chosen information criterion (AICc by default) from a local 
+search over a few regions of values. In particular, we fit individual ARIMA models
+as well as a pooled ARIMA model estimated from multiple time-series. As such, 
+the resuluting models include:
+
+* Pooled model over all samples,
+* Individual models for each inidvidual. 
+
+```{r models, echo = FALSE, eval = FALSE, message = FALSE, warning = FALSE}
+auto_arima <- function(df, variable, x){
+      
+      # 1. subset data to only contain that sample and make sure it's in order
+      sub <- df[df$subject_id == x, ]
+      sub_ord <- sub[order(sub$time_and_date), ]
+
+      # 2. split first 80% of data into training set, and last 20% into test set
+      split <- round(nrow(sub_ord) * .8)
+      train <- sub_ord[1:split, ]
+      train_var <- as.numeric(unlist(train[,which(colnames(train)==variable)]))
+      test <- sub_ord[(split + 1):nrow(sub_ord), ]
+      test_var <- as.numeric(unlist(test[,which(colnames(test) == variable)]))
+
+      # 3. fit auto ARIMA
+      fit <- auto.arima(y = train_var, stepwise = FALSE,
+                                approximation = FALSE)
+
+      # 4. obtain model coefficients                                          
+      fit_coef <- fit$coef
+
+      # 5. calculate residuals for subseuqent ACF and PACF plotting
+      fit_resid <- residuals(fit)
+
+      # 6. measure accuracy on the test set
+      model_test <- Arima(test_var, model = fit)
+      onestep_forecast <- fitted(model_test)
+      # accuracy of the one-step ahead out of sample forecasts
+      onestep_accuracy <- round(accuracy(model_test), 4)
+
+      plot_info <- list(onestep_forecast = onestep_forecast,
+                        test = test_var)
+
+      # 7. make relevant results pretty and return them
+      accuracy_onestep <- onestep_accuracy["Training set",]
+
+      return(list(fit = fit,
+                coefficients = fit_coef,
+                accuracy = accuracy_onestep,
+                plot_info = plot_info,
+                residuals = fit_resid))
+}
+
+run_auto_arima <- function(df, variable = "abpmean", id=NULL, pool=TRUE){
+  
+  if(pool){
+    
+    #######################################
+    ### Pooled ARIMA, across all samples
+    #######################################
+   
+    samples <- unique(df$subject_id)
+    
+    train_test_samples <- lapply(samples, function(x){
+      # 1. subset data to only contain that sample and make sure it's in order
+      sub <- df[df$subject_id == x, ]
+      sub_ord <- sub[order(sub$time_and_date), ]
+      
+      # 2. split first 80% of data into training set, and last 20% into test set
+      split <- round(nrow(sub_ord) * .8)
+      train <- sub_ord[1:split, ]
+      train_var <- as.numeric(unlist(train[,which(colnames(train)==variable)]))
+      test <- sub_ord[(split + 1):nrow(sub_ord), ]
+      test_var <- as.numeric(unlist(test[,which(colnames(test) == variable)]))
+      
+      return(list(train=train, test=test,
+                  train_var= train_var,
+                  test_var=test_var))
+    })
+    
+    #Pad individual time-series with a 120 min period.
+    train_test_samples<-lapply(train_test_samples, function(x){
+      x$train_var <- c(rep(NA, 120), x$train_var)
+      return(list(train_var=x$train_var,
+                  test_var=x$test_var))
+    })
+    
+    #Combined all the train time-series into one:
+    train_pooled <- ts(unlist(lapply(train_test_samples, function(x){x$train_var})))
+    test_pooled <- ts(unlist(lapply(train_test_samples, function(x){x$test_var})))
+
+    # 3. fit auto ARIMA
+    fit <- auto.arima(y = train_pooled, stepwise = FALSE,
+                                approximation = FALSE)
+
+    # 4. obtain model coefficients                                          
+    fit_coef <- fit$coef
+
+    # 5. calculate residuals for subseuqent ACF and PACF plotting
+    fit_resid <- residuals(fit)
+
+    # 6. measure pooled accuracy on the test set:
+    model_test <- Arima(test_pooled, model = fit)
+    onestep_forecast <- fitted(model_test)
+    onestep_accuracy <- round(accuracy(model_test), 4)
+    plot_info_pooled <- list(onestep_forecast = onestep_forecast,
+                                  test = test_pooled)
+    accuracy_onestep_pooled <- onestep_accuracy["Training set",]
+    
+    # 7. measure individual accuracy
+    indiv_stats<-lapply(train_test_samples, function(x){
+      model_test <- Arima(x$test, model = fit)
+      onestep_forecast <- fitted(model_test)
+      onestep_accuracy <- round(accuracy(model_test), 4)
+      plot_info <- list(onestep_forecast = onestep_forecast,
+                                  test = x$test)
+      accuracy_onestep <- onestep_accuracy["Training set",]
+      return(list(accuracy_onestep=accuracy_onestep,
+                  plot_info=plot_info))
+    })
+    list_acc <- lapply(indiv_stats, function(x) data.frame(as.list(x$accuracy_onestep)))
+    list_acc <- list_acc[lapply(list_acc, length) > 0]
+    accuracy <- rbindlist(list_acc, fill = TRUE)
+    accuracy <- data.frame(subject_id = samples, accuracy)
+    plot_info <- lapply(indiv_stats, function(x) x$plot_info)
+    names(plot_info) <- samples
+    
+    return(list(fit = fit,                                    #Pooled ARIMA fit
+                coefficients = fit_coef,                      #Coefs of the pooled ARIMA fit
+                accuracy_pooled = accuracy_onestep_pooled,    #Stats on pooled test sets
+                accuracy = accuracy,                          #Stats on individual test sets
+                plot_data_pooled = plot_info_pooled,          #Pooled predictions and truth (test set)
+                plot_data = plot_info,                        #Individual predictions and truth (test set)
+                residuals = fit_resid                         #Residuals from the pooled training set
+                ))
+  }else if(!pool){
+    
+    #######################################
+    ### Separate ARIMA for each time-series
+    #######################################
+    
+    if(is.null(id)){
+      
+      #Fit on all samples in df
+      samples <- unique(df$subject_id)
+      
+      # for each sample:
+      fit_list <- lapply(samples, function(i) {auto_arima(df=df, x = i, variable=variable)})
+      
+      # make results pretty
+      names(fit_list) <- samples
+      
+      list_coef <- lapply(fit_list, function(x) data.frame(as.list(x$coefficients)))
+      list_coef <- list_coef[lapply(list_coef, length) > 0]
+      coefficients <- rbindlist(list_coef, fill = TRUE)
+      coefficients <- data.frame(subject_id = names(list_coef), coefficients)
+      list_acc <- lapply(fit_list, function(x) data.frame(as.list(x$accuracy)))
+      list_acc <- list_acc[lapply(list_acc, length) > 0]
+      accuracy <- rbindlist(list_acc, fill = TRUE)
+      accuracy <- data.frame(subject_id = names(list_acc), accuracy)
+      plot_data <- lapply(fit_list, function(x) x$plot_info)
+      names(plot_data) <- samples
+      residuals <- lapply(fit_list, function(x) x$residuals)
+      names(residuals) <- samples
+
+      fit <- lapply(fit_list, function(x) x$fit)
+      names(fit) <- samples
+
+      return(list(fit = fit,
+                  coefficients = coefficients,
+                  accuracy = accuracy,
+                  plot_data = plot_data,
+                  residuals = residuals))
+      
+    }else if(!is.null(id)){
+     
+      # Fit only on the single specified sample
+      
+      fit_list <- auto_arima(df=df, x=id, variable=variable)
+
+      return(list(fit = fit_list$fit,
+                  coefficients = fit_list$coefficients,
+                  accuracy = fit_list$accuracy,
+                  plot_data = fit_list$plot_info,
+                  residuals = fit_list$residuals))
+    }
+  }
+}
+```
+
+```{r sample_fit, echo = FALSE, eval = FALSE, message = FALSE, warning = FALSE}
+### Sample and fit ARIMA models
+sample_and_fit = function(dat_no_gap, pool_size=263, ind_size=263, 
+                          variable= "abpmean", seed=11){
+  
+  set.seed(seed)
+  
+  #Get samples
+  samples <- unique(dat_no_gap$subject_id)
+  
+  #Get a pooled model over a subsample:
+  pool_samples <- base::sample(samples, size=pool_size)
+  pool_data<-dat_no_gap[dat_no_gap$subject_id %in% pool_samples,]
+  #Get individual samples to fit: 
+  ind_samples <- base::sample(samples, size=ind_size)
+  ind_data<-dat_no_gap[dat_no_gap$subject_id %in% ind_samples,]
+  
+  fit_pooled <- run_auto_arima(df=pool_data, variable = variable, pool=TRUE)
+  fit_individuals<-lapply(as.list(ind_samples), function(id){
+    run_auto_arima(df=ind_data, variable = variable, id=id, pool=FALSE)})
+  names(fit_individuals) <- ind_samples
+  
+  return(list(fit_pooled=fit_pooled,
+              fit_individuals=fit_individuals,
+              pool_data=pool_data,
+              ind_data=ind_data,
+              pool_samples=pool_samples,
+              ind_samples=ind_samples))
+}
+
+#Save the fits
+fit_v1 <- sample_and_fit(dat_no_gap=dat_no_gap)
+save.image(file=here("Simulations/ARIMA_sims/Results/fit_ARIMA_v1.Rdata"))
+```
+
+## Examine accuracy of one-step ahead forecasts
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+load(here("Simulations/ARIMA_sims/Results/fit_ARIMA_v1.Rdata"))
+
+##Pooled stats
+#Pooled vs. assessed on separate models accuracy
+acc_all <- rbind.data.frame(fit_v1$fit_pooled$accuracy_pooled, fit_v1$fit_pooled$accuracy)
+acc_all$subject_id<-as.numeric(levels(acc_all$subject_id))[acc_all$subject_id]
+acc_all[1,1]<-"pooled"
+#acc_all %>%
+#  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+#        caption = "Accuracy of pooled ARIMA one-step forecasts used for simulation") %>%
+#  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+#                position = "center")
+
+##Individual stats
+acc_ind <- t(rbind_list(lapply(fit_v1$fit_individuals, function(x){x$accuracy})))
+acc_ind <- cbind.data.frame(row.names(acc_ind), acc_ind)
+colnames(acc_ind) <- names(acc_all)
+row.names(acc_ind) <- NULL
+#acc_ind %>%
+#  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+#        caption = "Accuracy of ARIMA one-step forecasts used for simulation") %>%
+#  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+#                position = "center")
+
+#Combine results to compare:
+acc_comb <- merge(x=acc_all[,c("subject_id", "MAE")], 
+                  acc_ind[,c("subject_id", "MAE")],  by="subject_id")
+names(acc_comb)[2:3] <- c("MAE pooled", "MAE individual")
+acc_comb %>%
+  kable(format = "latex", booktabs = T, digits = 4, longtable = T,
+        caption = "Compare MAE for pooled and individual forecasts") %>%
+  kable_styling(latex_options = c("striped", "repeat_header"), font_size = 7,
+                position = "center")
+#test<-acc_comb[acc_comb$`MAE individual`>acc_comb$`MAE pooled`,]
+#acc_comb[which.max(acc_comb$`MAE pooled`-acc_comb$`MAE individual`),]
+#acc_comb[which.max(acc_comb$`MAE individual`-acc_comb$`MAE pooled`),]
+```
+
+```{r, echo = FALSE, warning = FALSE}
+
+load(here("Simulations/ARIMA_sims/Results/fit_ARIMA_v1.Rdata"))
+
+##Example: check how well the prediction of the pooled ARIMA looks on a sample
+plot_forecast <- function(fit, type=c("pooled", "individual", "time-series"), ts=NULL, id) {
+  
+  if(type=="pooled"){
+     
+    #Take the pooled prediction for sample id:
+    onestep_forecast <- fit$fit_pooled$plot_data[[as.character(id)]]$onestep_forecast
+    test_outcome <- fit$fit_pooled$plot_data[[as.character(id)]]$test
+    
+    return(ggplot() +
+           geom_line(aes(x = as.numeric(time(test_outcome)),
+                         y = as.numeric(test_outcome),
+                         col = "blue")) +
+           geom_line(aes(x = as.numeric(time(onestep_forecast)),
+                         y = as.numeric(onestep_forecast),
+                         col = "red")) +
+           scale_color_discrete(name = "",
+                                labels = c("truth", "pooled forecast")) +
+           labs(title = paste0(type, " fit for subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") +
+           theme(legend.position="top"))
+    }else if(type=="individual"){
+      
+    #Take the individual prediction for sample id:
+    onestep_forecast <- fit$fit_individuals[[as.character(id)]]$plot_data$onestep_forecast
+    test_outcome <- fit$fit_individuals[[as.character(id)]]$plot_data$test
+    
+    return(ggplot() +
+           geom_line(aes(x = as.numeric(time(test_outcome)),
+                         y = as.numeric(test_outcome),
+                         col = "blue")) +
+           geom_line(aes(x = as.numeric(time(onestep_forecast)),
+                         y = as.numeric(onestep_forecast),
+                         col = "red")) +
+           scale_color_discrete(name = "",
+                                labels = c("truth", "individual forecast")) +
+           labs(title = paste0(type, " fit for subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") +
+           theme(legend.position="top"))
+    
+  }else if("time-series"){
+    return(ggplot() +
+           geom_line(aes(x = as.numeric(time(ts)),
+                         y = as.numeric(ts),
+                         col = "blue")) +
+           scale_color_discrete(name = "",
+                                labels = c("time-series")) +
+           labs(title = paste0("Time-Series for subject ", id),
+                x = "Time in test set (minutes)",
+                y = "Mean blood pressure") +
+           theme(legend.position="top"))
+  }
+}
+
+#Example of individual forecast doing better
+par(mfrow=c(2,1))
+plot_forecast(fit=fit_v1, type = "individual", id = 13569)
+plot_forecast(fit=fit_v1, type = "pooled", id = 13569)
+
+#Example of pooled forecast doing better
+par(mfrow=c(2,1))
+plot_forecast(fit=fit_v1, type = "individual", id = 15631)
+plot_forecast(fit=fit_v1, type = "pooled", id = 15631)
+
+```
+
+\normalsize
+\newpage
+
+# Simulate from ARIMA models
+
+We use the ARIMA fitted models to simulate 
+time series. We simulate from both individual 
+trajectories and pooled trajectories, while adding extra noise. 
+
+* By default, the error series is assumed normally distributed and generated 
+  using `rnorm`. However, we set `bootstrap=TRUE`, so the residuals are 
+  resampled instead. Also, we set `future=TRUE`, so the sample paths are 
+  conditional on the data that was used to fit the model. 
+
+* When `future=FALSE` and the model is stationary, the sample paths do not 
+  depend on the data at all. When `future=FALSE` and the model is 
+  non-stationary, the location of the sample paths is arbitrary, so they all 
+  start at the value of the first observation.
+  
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+
+# id = Subject id to simulate from
+# t = Number of times we want to interrupt the individual-based-model time-series.
+# niter = Number of time series simulations for specified model.
+# nsim	= Number of periods for the simulated series.
+# bootstrap = Do simulation using resampled errors rather than normally 
+#             distributed errors or errors provided as innov.
+# future = Produce sample paths that are future to and conditional on the data 
+#          in object. Otherwise simulate unconditionally.
+# seed = Either NULL or an integer that will be used in a call to set.seed 
+#        before simulating the time series.
+# noise = If true, we add extra white noise to the model.
+
+#Note: 330 will correspond to total of 8 hours of data
+run_simulation <- function(id=13569, t=0, niter = 1, fit=NULL, df=NULL, 
+                           nsim = 300, seed = 4197, future = TRUE, 
+                           bootstrap = TRUE, noise=TRUE) {
+  
+  ####TO DO: add the niter option; for now simulate just once
+
+  #Get the pooled model
+  model_pool <- fit$fit_pooled$fit
+  #Get the individual model
+  model_individual <- fit$fit_individuals[[as.character(id)]]$fit
+  
+  #Get the individual covariates:
+  W <- df[df$subject_id==id,-c(1,6,7,8,9,10,11,25,26,27,28,35:106,122:151)]
+  
+  #Simulate individual and pooled time-series:
+  #PROBLEM: Oh, oh: might result in negative values...
+  abpmean_truth <- fit$fit_individuals[[as.character(id)]]$plot_data$test
+  abpmean_individual <- ts(simulate(model_individual, nsim = nsim, bootstrap = bootstrap, 
+                        future = future, seed = seed))
+  abpmean_pooled <- ts(simulate(model_pool, nsim = nsim, bootstrap = bootstrap, 
+                        future = future, seed = seed))
+  if(noise){
+    abpmean_pooled <- abpmean_pooled + 2*arima.sim(model=list(order = c(0, 0, 0)), n=nsim)
+    abpmean_individual <- abpmean_individual + 2*arima.sim(model=list(order = c(0, 0, 0)), n=nsim)
+  }
+  
+  time <- seq(1, nsim, 1)
+  
+  #TO DO: Recode this...
+  #Combine pooled and individual model into one  based on 
+  #the number of interruptions
+  start<-1
+  abpmean_combined <- NULL
+  diff<-nsim/(t+1)
+  for(i in 1:(t+1)){
+    if((i %% 2 != 0) & (start<nsim)){
+      abpmean_combined <- c(abpmean_combined, abpmean_individual[start:(diff*i)])
+      start <- start + diff
+    }else if ((i %% 2 == 0) & (start<nsim)){
+      abpmean_combined <- c(abpmean_combined, abpmean_pooled[start:(diff*i)])
+      start <- start + diff
+    }
+  }
+  if(length(abpmean_combined)<nsim){
+    diff<-nsim-length(abpmean_combined)
+    abpmean_combined<-c(abpmean_combined,abpmean_individual[(nsim-diff+1):nsim])
+  }
+  
+  abpmean_combined <- ts(abpmean_combined)
+  res <- data.frame(subject_id=id, W, abpmean=abpmean_combined)
+  #final <- new_Y_sol1(train_all = res, cutoff = 65)  
+  res$Y_15 <- lead(abpmean_combined, 15)
+  res$Y_20 <- lead(abpmean_combined, 20)
+  res$Y_25 <- lead(abpmean_combined, 25)
+  res$Y_30 <- lead(abpmean_combined, 30)
+  return(list(dat=res,
+              abpmean_combined=abpmean_combined,
+              abpmean_individual=abpmean_individual,
+              abpmean_pooled=abpmean_pooled,
+              abpmean_truth=abpmean_truth))
+  }
+}
+```
+
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+### Simulate dataset used for the Combined SL
+id<-13569
+df=dat_no_gap
+test_sample <- run_simulation(id=id, fit=fit_v1, df=dat_no_gap)
+
+#Get all the rest of the samples:
+sub_samples<-fit_v1$pool_samples
+sub_samples<-sub_samples[!sub_samples %in% id]
+sub_df<-df[df$subject_id %in% sub_samples, -c(6,7,8,9,11,35:106,122:151)]
+sub_df<-data.frame(sub_df)
+#names(test_sample$dat)[!names(test_sample$dat) %in% names(sub_df)] 
+
+###############################
+# Simulated time-series
+###############################
+ind_sub_df<-rbind.data.frame(sub_df, test_sample$dat)
+
+#Full dataset 
+save(ind_sub_df, file = here::here("Simulations/ARIMA_sims/Results/t=0", paste0("ind_sub_df", id, ".Rdata")), compress = TRUE)
+```
+
+# Fit combined super learner
+
+```{r, eval = FALSE, echo = FALSE, warning = FALSE}
+##########################################
+# Simulated time-series with t=0
+##########################################
+load(here::here("Simulations/ARIMA_sims/Results/t=0", "ind_sub_df13569.Rdata"))
+
+############################ set up learners ###############################
+grid_params = list(max_depth = c(2,5,8),
+                   eta = c(0.005, 0.1, 0.25))
+grid = expand.grid(grid_params, KEEP.OUT.ATTRS = FALSE)
+params_default = list(nthread = getOption("sl.cores.learners", 1))
+xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
+  do.call(Lrnr_xgboost$new, c(params_default, as.list(params_tune)))
+})
+lrnr_lasso <- make_learner(Lrnr_glmnet, alpha = 1)
+lrnr_glm <- make_learner(Lrnr_glm)
+learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm, lrnr_lasso),
+                                       recursive = TRUE))
+lrnr_mean <- make_learner(Lrnr_mean)
+learners_ind <- make_learner(Stack, lrnr_mean, lrnr_glm, lrnr_lasso)
+
+########################### set up W,Y,datasets ###############################
+ind_sub_df <- ind_sub_df[,-c(2,6,40:56)]
+hist_data <- data.table(ind_sub_df[!(ind_sub_df$subject_id) %in% id,]) 
+ind_data <- data.table(ind_sub_df[(ind_sub_df$subject_id) %in% id,] ) 
+covs <- names(ind_sub_df)[-c(17:20)]
+outcome <- "Y_20"
+
+######################## Learn the historical fit ###############################
+historical_fit <- make_historical_fit(
+  historical_data = hist_data, 
+  outcome = outcome, 
+  covariates = covs, 
+  id = "subject_id", 
+  historical_stack = learners
+  )
+
+######################## Learn the individual fit ###############################
+#Split data into time chuncks
+splits <- seq(10,300,50)
+split_data <- lapply(splits, function(x) data.table(ind_data[1:x,]))
+
+#Save all results
+result_list <- list()
+
+result_list[[1]] <- make_adapt_sl(
+  individual_training_data = split_data[[1]], 
+  indiviual_forecast_data = ind_data[c((nrow(split_data[[1]])+1):(nrow(split_data[[1]])+5)),],
+  outcome = outcome, 
+  covariates = covs, 
+  subject_id = id,
+  historical_fit = historical_fit,
+  individual_stack = learners_ind
+)
+
+
+
+```
+

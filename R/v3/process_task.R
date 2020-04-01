@@ -1,8 +1,8 @@
 # solves issue with mismatch between historical and individual delta column
 process_task <- function(individual_training_task, historical_fit){
   
-  hist_cols <- names(historical_fit$task$column_names)
-  ind_cols <- names(individual_training_task$column_names)
+  hist_cols <- historical_fit$task$nodes$covariates
+  ind_cols <- individual_training_task$nodes$covariates
   ind_cols_miss <- hist_cols[!(hist_cols %in% ind_cols)]
   delta_cols <- grep("delta_", ind_cols_miss)
   
@@ -17,7 +17,7 @@ process_task <- function(individual_training_task, historical_fit){
                                          ind_cols_miss_extra)
   processed_task <- make_sl3_Task(
     data = ind_train_data_new, 
-    covariates = c(covariates, ind_cols_miss),
+    covariates = c(ind_cols, names(ind_cols_miss_extra)),
     outcome = outcome, 
     folds = folds
   )

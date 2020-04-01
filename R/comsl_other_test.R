@@ -8,8 +8,8 @@ library(ggplot2)
 library(sl3)
 library(origami)
 
-source(here::here("R", "utils_mimic.R"))
-load(here::here("Data", "data_summaryY.Rdata"))
+#source(here::here("R", "utils_mimic.R"))
+#load(here::here("Data", "data_summaryY.Rdata"))
 
 dat_filtered <- filter(data, 
                        imputed_abpmean == 0 & imputed_abpsys_abpdias == 0)
@@ -81,7 +81,7 @@ for(i in 1:nrow(grid_unique)){
 term <- c("amine", "sedation", "ventilation", "spo2", "hr", "abpmean", 
           "abpsys", "abpdias")
 formulas_1term <- list()
-for(i in 1:length(formulas_1term)){
+for(i in 1:length(term)){
   formulas_1term[[i]] <- paste("Y~", term[i])
 }
 

@@ -209,7 +209,7 @@ library(feasts)
 library(forecast)
 
 #Relevant functions
-summarize_history_continuous <- function(history, current, var="abpsys", lags=10){
+summarize_history_continuous <- function(history, current, var="abpsys"){
   
   hist <- nrow(history)
   
@@ -222,8 +222,8 @@ summarize_history_continuous <- function(history, current, var="abpsys", lags=10
   names(sum_hist) <- paste0(var, "_", sum_hist_names)
   
   #Include full lags (of cardinality lags):
-  lags_data <- history[1:lags,var]
-  names(lags_data) <- paste0("lag_", seq(lags))
+  #lags_data <- history[2:(lags+1),var]
+  #names(lags_data) <- paste0("lag_", seq(1, lags))
   
   #Is the history stationary (Variance Ratio Test)
   #stat <- vrtest::Auto.VR(history[,var])[[1]]
@@ -278,7 +278,7 @@ summarize_history_continuous <- function(history, current, var="abpsys", lags=10
     features_ts <- features_ts[,all_names_features]
   }
   
-  return(cbind(t(sum_hist), t(lags_data), features_ts))
+  return(cbind(t(sum_hist), features_ts))
 }
 
 add_history_continuous <- function(ind_data, min_history){
@@ -297,18 +297,39 @@ add_history_continuous <- function(ind_data, min_history){
     current <- dat_ordered[i,]
     
     abpsys <- summarize_history_continuous(history=history, current=current, 
-                                           var="abpsys", lags = 10)
+                                           var="abpsys")
     abpdias <- summarize_history_continuous(history=history, current=current, 
-                                            var="abpdias", lags = 10)
+                                            var="abpdias")
     abpmean <- summarize_history_continuous(history=history, current=current, 
-                                            var="abpmean", lags = 10)
+                                            var="abpmean")
     spo2 <- summarize_history_continuous(history=history, current=current, 
-                                         var="spo2", lags = 10)
+                                         var="spo2")
     
     current_history[[i]] <- data.frame(current, abpsys, abpdias, abpmean, spo2)
   }
   df <- do.call(rbind, current_history)
   return_df <- suppressMessages(full_join(dat_ordered[1,], df))
+  
+  #Add lags now:
+  lags_sys <- data.frame(matrix(NA, nrow = nrow(return_df), 10))
+  lags_dias <- data.frame(matrix(NA, nrow = nrow(return_df), 10))
+  lags_mean <- data.frame(matrix(NA, nrow = nrow(return_df), 10))
+  lags_spo2 <- data.frame(matrix(NA, nrow = nrow(return_df), 10))
+  
+  for(l in 1:10){
+    lags_sys[,l]  <- lead(return_df $abpsys,l)
+    lags_dias[,l] <- lead(return_df $abpdias,l)
+    lags_mean[,l] <- lead(return_df $abpmean,l)
+    lags_spo2[,l] <- lead(return_df $spo2,l)
+  }
+  
+  names(lags_sys) <- paste0("abpsys_lag_", seq(10))
+  names(lags_dias) <- paste0("abpdias_lag_", seq(10))
+  names(lags_mean) <- paste0("abpmean_lag_", seq(10))
+  names(lags_spo2) <- paste0("spo2_lag_", seq(10))
+  
+  return_df <- cbind.data.frame(return_df,lags_sys,lags_dias,lags_mean,lags_spo2)  
+  
   return(return_df)
 }
 
@@ -404,7 +425,9 @@ continuous_history_list <- foreach(n = 1:N) %dopar% {
 
 return_list_30<-list()
 return_list_60<-list()
-for(n in 157:N){
+
+N <- length(unique(binary_history30$subject_id))
+for(n in 749:N){
   id <- levels(binary_history30$subject_id)[n]
   ind_dat_30 <- dplyr::filter(binary_history30, subject_id == id)
   ind_dat_60 <- dplyr::filter(binary_history60, subject_id == id)
@@ -419,12 +442,18 @@ for(n in 157:N){
   return_list_60[[n]] <- history60
 }
 
-
-save(return_list_30, file = here("Data", "return_list_30.Rdata"),
+save(return_list_30, 
+     file = "/Users/imalenica/Dropbox/Berkeley_Projects/Romain/Combined Super Learner/Data/return_list_30.Rdata", 
+     compress = TRUE)
+save(return_list_60, 
+     file = "/Users/imalenica/Dropbox/Berkeley_Projects/Romain/Combined Super Learner/Data/return_list_60.Rdata",
+     compress = TRUE)
+save(return_list_30, file = here("Data", "return_list_30.Rdata"), 
      compress = TRUE)
 save(return_list_60, file = here("Data", "return_list_60.Rdata"),
      compress = TRUE)
 
+#https://stackoverflow.com/questions/51295402/r-on-macos-error-vector-memory-exhausted-limit-reached
 fin_history60 <- do.call(rbind, return_list_60)
 fin_history30 <- do.call(rbind, return_list_30)
 
@@ -432,3 +461,15 @@ save(fin_history30, file = here("Data", "fin_history30.Rdata"),
      compress = TRUE)
 save(fin_history60, file = here("Data", "fin_history60.Rdata"),
      compress = TRUE)
+
+#Subset data:
+return_list_30_subset <- return_list_30[1:400]
+return_list_60_subset <- return_list_60[1:400]
+fin_history60_subset <- do.call(rbind, return_list_60_subset)
+fin_history30_subset <- do.call(rbind, return_list_30_subset)
+save(fin_history30_subset, file = here("Data", "fin_history30_subset.Rdata"),
+     compress = TRUE)
+save(fin_history60_subset, file = here("Data", "fin_history60_subset.Rdata"),
+     compress = TRUE)
+
+
