@@ -117,9 +117,9 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   }))
   
   # combine predictions
-  learners <- c(paste0("individual_", colnames(ind_preds)), 
-                paste0("historical_", colnames(hist_preds)))
-  training_preds <- cbind.data.frame(ind_preds, hist_preds)
+  learners <- c(paste0("historical_", colnames(hist_preds)),
+                paste0("individual_", colnames(ind_preds)))
+  training_preds <- cbind.data.frame(hist_preds, ind_preds)
   names(training_preds) <- learners
 
   # get true Y
@@ -168,15 +168,21 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
     outcome = "unknown_outcome", 
     folds = forecast_fold
   )
+  
+  # issue with mismatch between historical and individual delta column:
+  forecast_task <- process_task(individual_training_task=forecast_task, 
+                                historical_fit=historical_fit)
+  
   ind_forecast <- ind_fit$predict(forecast_task)
-  hist_forecast <- cbind.data.frame(lapply(historical_fit, function(fit){
+  historical_fits <- historical_fit[1:4]
+  hist_forecast <- cbind.data.frame(lapply(historical_fits, function(fit){
       fit$predict(forecast_task)
     }))
   
   # combine forecasts
-  learners <- c(paste0("individual_", colnames(ind_forecast)), 
-                paste0("historical_", colnames(hist_forecast)))
-  forecast <- cbind.data.frame(ind_forecast, hist_forecast)
+  learners <- c(paste0("historical_", colnames(hist_forecast)),
+                paste0("individual_", colnames(ind_forecast)))
+  forecast <- cbind.data.frame(hist_forecast, ind_forecast)
   names(forecast) <- learners
   
   # use sl weights for forecast with sl
