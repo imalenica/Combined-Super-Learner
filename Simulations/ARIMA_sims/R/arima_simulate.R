@@ -14,10 +14,11 @@
 # seed : Either NULL or an integer that will be used in a call to set.seed 
 #        before simulating the time series.
 # noise : If true, we add extra white noise to the model.
+# add_lags: 
 
 run_simulation <- function(id=13569, t=0, fit=NULL, df=NULL, W=NULL, var="abpmean",
                            nsim = 300, seed = 4197, future = TRUE, historical_true=FALSE,
-                           bootstrap = TRUE, noise=TRUE) {
+                           bootstrap = TRUE, noise=TRUE, add_lags=TRUE) {
   
   #Get samples used for the pooled fit:
   id_pool <- fit$fit_pooled$accuracy$subject_id
@@ -88,6 +89,17 @@ run_simulation <- function(id=13569, t=0, fit=NULL, df=NULL, W=NULL, var="abpmea
   abpmean_combined <- ts(abpmean_combined)
   res <- data.frame(subject_id=id, W_id, abpmean=abpmean_combined)
   
+  #Add lags:
+  if(add_lags){
+    lags_mean <- data.frame(matrix(NA, nrow = nrow(res), 5))
+    for(l in 1:5){
+      lags_mean[,l] <- lead(abpmean_combined,l)
+    }
+    names(lags_mean) <- paste0("abpmean_lag_", seq(5))
+    
+    res <- cbind.data.frame(res, lags_mean)
+  }
+
   #Add outcome:
   #final <- new_Y_sol1(train_all = res, cutoff = 65)  
   res$Y_15 <- lead(abpmean_combined, 15)
@@ -103,6 +115,11 @@ run_simulation <- function(id=13569, t=0, fit=NULL, df=NULL, W=NULL, var="abpmea
   #final <- new_Y_sol1(train_all = res, cutoff = 65)  
   res_hist <- res_hist %>%
     dplyr::group_by(subject_id) %>%
+    dplyr::mutate(abpmean_lag_1 = lead(abpmean, 1)) %>%
+    dplyr::mutate(abpmean_lag_2 = lead(abpmean, 2)) %>%
+    dplyr::mutate(abpmean_lag_3 = lead(abpmean, 3)) %>%
+    dplyr::mutate(abpmean_lag_4 = lead(abpmean, 4)) %>%
+    dplyr::mutate(abpmean_lag_5 = lead(abpmean, 5)) %>%
     dplyr::mutate(Y_15 = lead(abpmean, 15)) %>%
     dplyr::mutate(Y_20 = lead(abpmean, 20)) %>%
     dplyr::mutate(Y_25 = lead(abpmean, 25)) %>%

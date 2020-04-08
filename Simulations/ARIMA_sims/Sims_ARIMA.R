@@ -35,8 +35,7 @@ xgb_learners = apply(grid, MARGIN = 1, function(params_tune) {
 })
 lrnr_lasso <- make_learner(Lrnr_glmnet, alpha = 1)
 lrnr_glm <- make_learner(Lrnr_glm)
-lrnr_mean <- make_learner(Lrnr_mean)
-learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_mean, lrnr_glm, lrnr_lasso),
+learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm, lrnr_lasso),
                                        recursive = TRUE))
 
 learners_ind <- make_learner(Stack, lrnr_mean, lrnr_glm, lrnr_lasso)
