@@ -38,7 +38,7 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   ################################## train SLs #################################
   
   # make folds with training data
-  folds <- origami::make_folds(individual_training_data, 
+  folds <- origami::make_folds(data.table(individual_training_data), 
                                fold_fun = folds_rolling_origin,
                                first_window = 5, 
                                validation_size = 5, 
@@ -47,14 +47,16 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
                                )
 
   training_task <- make_sl3_Task(
-    data = individual_training_data, 
+    data = data.table(individual_training_data), 
     covariates = covariates,
     outcome = outcome, 
-    folds = folds
+    folds = folds,
+    id = "subject_id"
     )
   # issue with mismatch between historical and individual delta column:
-  training_task <- process_task(individual_training_task=training_task, 
-                                historical_fit=historical_fit)
+  training_task <- process_task(
+    individual_training_task = training_task, 
+    historical_task = historical_fit$fit_object$full_fit$training_task)
 
   # fit initial superlearner if past_individual_fit is not provided
   if(is.null(past_individual_fit) & is.null(individual_stack)) {
@@ -108,14 +110,22 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   # predict with individualized learners and historical learners
   ind_preds <- ind_fit$predict(training_task)
   
-  historical_fits <- historical_fit[1:4]
-  hist_preds <- bind_rows(lapply(folds, function(fold) {
-    test_set_in_training_task <- validation_task(training_task, fold)
-    hist_fits <- cbind.data.frame(lapply(historical_fits, function(fit){
-      fit$predict_fold(test_set_in_training_task, "full")
+  if(class(historical_fit) == "list"){
+    historical_fits <- historical_fit[1:length(historical_fit)]
+    
+    hist_preds <- bind_rows(lapply(folds, function(fold) {
+      test_set_in_training_task <- validation_task(training_task, fold)
+      hist_fits <- cbind.data.frame(lapply(historical_fits, function(fit){
+        fit$predict_fold(test_set_in_training_task, "full")
+      }))
     }))
-  }))
-  
+  } else {
+    hist_preds <- bind_rows(lapply(folds, function(fold) {
+      test_set_in_training_task <- validation_task(training_task, fold)
+      historical_fit$predict_fold(test_set_in_training_task, "full")
+      }))
+  }
+  # historical_fit$fit_object$full_fit$learner_fits$Lrnr_screener_coefs_0.1$fit_object$selected
   # combine predictions
   learners <- c(paste0("historical_", colnames(hist_preds)),
                 paste0("individual_", colnames(ind_preds)))
