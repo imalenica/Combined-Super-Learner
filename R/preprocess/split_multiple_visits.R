@@ -58,21 +58,21 @@ d30 <- data.table(merge(fixed_data, all_history30, all.y = TRUE,
 d60 <- data.table(merge(fixed_data, all_history60, all.y = TRUE,
                         by = c("subject_id", "min_elapsed")))
 
-mimic_history30 <- setorder(d30, subject_id, min_elapsed)
-dim(mimic_history30) 
+d30 <- setorder(d30, subject_id, min_elapsed)
+dim(d30) 
 # [1] 5035962     163
-mimic_history60 <- setorder(d60, subject_id, min_elapsed)
+d60 <- setorder(d60, subject_id, min_elapsed)
 
 # fuck -- just realized the history is all fucked for the multiple stays.. 
 # we would have to redo the history after dealing with the multi stay.. 
 # and that takes forever so I am just going to keep the first stay, woohoo..
-mimic_history30 <- mimic_history30 %>% filter(!grepl("_2|_3|_4", subject_stay_id)) 
-mimic_history60 <- mimic_history60 %>% filter(!grepl("_2|_3|_4", subject_stay_id))
-dim(mimic_history30) 
+d30 <- d30 %>% filter(!grepl("_2|_3|_4", subject_stay_id)) 
+d60 <- d60 %>% filter(!grepl("_2|_3|_4", subject_stay_id))
+dim(d30) 
 # [1] 4434999     163
 # data loss ~ 12%
 
-save(mimic_history30, file = here::here("Data","mimic_history30.Rdata"), 
-     compress = TRUE)
-save(mimic_history60, file = here::here("Data","mimic_history60.Rdata"), 
-     compress = TRUE)
+mimic30 <- data.table(d30)
+mimic60 <- data.table(d60)
+save(mimic30, file = here::here("Data","mimic30.Rdata"), compress = TRUE)
+save(mimic60, file = here::here("Data","mimic60.Rdata"), compress = TRUE)
