@@ -60,12 +60,32 @@ screen_rf_pipe <- make_learner(Pipeline, screener_rf, stack)
 # final stack
 stack <- make_learner(Stack, screen_cor_pipe, screen_rf_pipe)
 
-###################### create historical data and fit ##########################
-notX <- c("subject_id","time_and_date","min_elapsed","Y_15","Y_20","Y_25","Y_30")
+############################# fit historical data ##############################
+notX <- c("subject_id","time_and_date","min_elapsed","Y_15","Y_20","Y_25","Y_30",
+          "amine_switch1", "amine_switch0", "sedation_switch1", 
+          "sedation_switch0", "ventilation_switch1", "ventilation_switch0")
 X <- colnames(historical_dat)[-which(colnames(historical_dat) %in% notX)]
 
-historical_fit <- make_historical_sl(
-  historical_data = data.table(historical_dat), 
+historical30_dat <- historical_data30 %>%
+  group_by(subject_id) %>%
+  slice(11:n())
+
+historical30_fit <- make_historical_sl(
+  historical_data = data.table(historical30_dat), 
+  outcome = "Y", 
+  covariates = X, 
+  id = "subject_id", 
+  historical_stack = learners,
+  parallelize = TRUE, 
+  cpus_logical = 23
+)
+
+historical60_dat <- historical_data60 %>%
+  group_by(subject_id) %>%
+  slice(11:n())
+
+historical60_fit <- make_historical_sl(
+  historical_data = data.table(historical60_dat), 
   outcome = "Y", 
   covariates = X, 
   id = "subject_id", 
