@@ -435,8 +435,8 @@ history60 <- lapply(continuous_history_list, '[[', 'history60')
 apply(do.call(rbind,lapply(history30,colnames)), 2, function(x) length(unique(x)) == 1)
 apply(do.call(rbind,lapply(history60,colnames)), 2, function(x) length(unique(x)) == 1)
 
-all_history30 <- do.call(rbind, history30)
-all_history60 <- do.call(rbind, history60)
+all_history30 <- data.table(do.call(rbind, history30))
+all_history60 <- data.table(do.call(rbind, history60))
 save(all_history30, file = here("Data", "all_history30.Rdata"), compress = TRUE)
 save(all_history60, file = here("Data", "all_history60.Rdata"), compress = TRUE)
 
