@@ -11,17 +11,17 @@
 # id: column name indicating unique subject identifier for appropraite V-fold cv
 
 make_historical_sl <- function(historical_data, outcome, covariates, id,
-                               historical_stack, parallelize = FALSE, 
-                               cpus_logical = NULL){
+                               historical_stack, V = 5, parallelize = FALSE, 
+                               cpus_logical = NULL, fit_sl = TRUE){
   
   task <- make_sl3_Task(
     data = historical_data, 
     covariates = covariates,
     outcome = outcome,
     id = id,
-    drop_missing_outcome = T
+    drop_missing_outcome = T,
+    folds = origami::make_folds(historical_data, fold_fun = folds_vfold, V = V)
   )
-  
   cv_stack <- Lrnr_cv$new(historical_stack, full_fit = TRUE)
   if(parallelize){
     plan(multicore, workers = cpus_logical)
@@ -32,23 +32,27 @@ make_historical_sl <- function(historical_data, outcome, covariates, id,
   } else {
     fit <- cv_stack$train(task)
   }
-  chained_task <- fit$chain(task)
   
-  metalearner_nnls <- make_learner(Lrnr_nnls)
-  nnls_fit <- metalearner_nnls$train(chained_task)
-  sl_nnls <- make_learner(Pipeline, fit, nnls_fit)
-  
-  metalearner_nnls_convex <- make_learner(Lrnr_nnls, convex = TRUE)
-  nnls_fit_convex <- metalearner_nnls_convex$train(chained_task)
-  sl_nnls_convex <- make_learner(Pipeline, fit, nnls_fit_convex)
-  
-  metalearner_discrete <- make_learner(Lrnr_cv_selector)
-  discrete_fit <- metalearner_discrete$train(chained_task)
-  sl_discrete <- make_learner(Pipeline, fit, discrete_fit)
-  
-  fits <- list(cv_fit = fit,
-               sl_nnls = sl_nnls,
-               sl_nnls_convex = sl_nnls_convex,
-               sl_discrete = sl_discrete)
-  return(fits)
+  if(fit_sl){
+    chained_task <- fit$chain(task)
+    
+    metalearner_nnls <- make_learner(Lrnr_nnls)
+    nnls_fit <- metalearner_nnls$train(chained_task)
+    sl_nnls <- make_learner(Pipeline, fit, nnls_fit)
+    
+    metalearner_nnls_convex <- make_learner(Lrnr_nnls, convex = TRUE)
+    nnls_fit_convex <- metalearner_nnls_convex$train(chained_task)
+    sl_nnls_convex <- make_learner(Pipeline, fit, nnls_fit_convex)
+    
+    metalearner_discrete <- make_learner(Lrnr_cv_selector)
+    discrete_fit <- metalearner_discrete$train(chained_task)
+    sl_discrete <- make_learner(Pipeline, fit, discrete_fit)
+    
+    fit_return_obj <- list(cv_fit = fit, sl_discrete = sl_discrete, 
+                           sl_nnls = sl_nnls, sl_nnls_convex = sl_nnls_convex, 
+                           task=task)
+  } else {
+    fit_return_obj <- fit
+  }
+  return(fit_return_obj)
 }

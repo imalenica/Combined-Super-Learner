@@ -1,3 +1,5 @@
+'%nin%' <- Negate('%in%')
+
 ## Sample n individuals with t periods
 sample_n_t = function(df,n,t){
 

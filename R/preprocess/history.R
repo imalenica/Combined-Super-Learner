@@ -4,6 +4,11 @@ library(here)
 library(doParallel)
 library(compare)
 
+library(tsibble)
+library(vrtest)
+library(feasts)
+library(forecast)
+
 load(here::here("Data","mimic.Rdata"))
 
 ################################################################################
@@ -422,6 +427,18 @@ continuous_history_list <- foreach(n = 1:N) %dopar% {
   
   return(return_list)
 }
+
+history30 <- lapply(continuous_history_list, '[[', 'history30')
+history60 <- lapply(continuous_history_list, '[[', 'history60')
+
+# check all column names equal
+apply(do.call(rbind,lapply(history30,colnames)), 2, function(x) length(unique(x)) == 1)
+apply(do.call(rbind,lapply(history60,colnames)), 2, function(x) length(unique(x)) == 1)
+
+all_history30 <- data.table(do.call(rbind, history30))
+all_history60 <- data.table(do.call(rbind, history60))
+save(all_history30, file = here("Data", "all_history30.Rdata"), compress = TRUE)
+save(all_history60, file = here("Data", "all_history60.Rdata"), compress = TRUE)
 
 return_list_30<-list()
 return_list_60<-list()
