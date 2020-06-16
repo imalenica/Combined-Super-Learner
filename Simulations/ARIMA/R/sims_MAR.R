@@ -1,4 +1,30 @@
-### ARIMA simulations with common W
+### Mixture autoregressive models (MAR)
+# consist of multiple stationary or non-stationary autoregressive components
+# MAR(K; p1, p2, .... pk): finite mixture of K Gaussian AR models
+
+#https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html
+#Entropy: measures the forecastability of the series
+#Stability: based on non-overlapping windows; variance of the means
+#max_level_shift: largest mean shift between two consecutive windows (along with time)
+#max_var_shift: largest variance shift between two consecutive windows (along with time)
+#max_kl_shift: largest shift in Kulback-Leibler divergence between two consecutive windows (along with time)
+#crossing_points: number of times a ts crosses the mean line
+#nperiods: number of seasonal periods (=1 for non-seasonal data)
+
+#### STL decomposition:
+# x_t = f_t + s_{1,t} + s_{M,t + e_t}
+#trend: smoothed trend component (f_t)
+#spike: spikiness of a time-series (variance of the leave-one-out variances of 
+#                                   the remainder component (e_t))
+
+#### heterogeneity:
+#arch_acf: sum of squares of the first 12 autocorrelations of x_t^2
+#garch_acf: sum of squares of the first 12 autocorrelations of z_t^2
+#arch_r2: R^2 value of an AR model applied to x_t^2
+#garch_r2: R^2 value of an AR model applied to z_t^2
+
+#nonlinearity: coefficient computed using a modification of the statistic used in 
+#              Terasvirta's nonlinearity test; large values = nonlinear
 
 options(warn=-1)
 #remotes::install_github("tlverse/sl3@timeseries-overhaul")
@@ -12,14 +38,37 @@ suppressMessages(library(kableExtra))
 suppressMessages(library(sl3))
 suppressMessages(library(origami))
 suppressMessages(library(data.table))
-require(smooth)
+suppressMessages(library(gratis))
+suppressMessages(library(tsfeatures))
 
 #Load Combined SL
 file.sources = list.files(path=here("R/v3/"),pattern="*.R")
 sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
-source(here("Simulations/ARIMA/sims_functions.R"))
+source(here("Simulations/ARIMA/R/sims_functions.R"))
 
-data_gen_v1 <- function(n,t){
+###############################################################################################
+#load(here::here("Data/fin_history60_subset.Rdata"))
+#data <- fin_history60_subset
+
+#Limit data to the first 7 hours
+#dat <- data %>%
+#  dplyr::group_by(subject_id) %>%
+#  dplyr::mutate(time=1:n()) %>%
+#  dplyr::filter(min_elapsed <= 420)
+
+#Exclude samples with time gaps 
+#dat_no_gap <- dat %>% 
+#  dplyr::mutate(time_count = n()) %>%
+#  dplyr::filter(time_count == 420)
+
+#ts_abp <- dat_no_gap$abpmean
+#ts_abp_features <- tsfeatures(ts_abp, features=c("entropy", "stability", "max_level_shift", 
+#                                                 "max_var_shift","max_kl_shift", 
+#                                                 "crossing_points", "stl_features",
+#                                                 "heterogeneity","nonlinearity"))
+###############################################################################################
+
+data_gen_v3 <- function(n,t){
   sim_historical <- list() 
   ts_offset <- function(W){
     start <- 0.5*W[,"care_unit"] + 0.02*W[,"age"] + 0.5*W[,"sex"]
@@ -34,7 +83,13 @@ data_gen_v1 <- function(n,t){
                           care_unit = round(runif(n = t, min = 0, max=2)))
     
     sim_ts <- as.numeric(75 + ts_offset(W) + 
-                           arima.sim(model=list(ar=c(0.6,0.4,0.1,-0.1,-0.05)),n=t))
+                           generate_ts_with_target(n = 1, ts.length = t, freq = 1, seasonal = 0,
+                                                   features = c("entropy", "stability", "stl_features", 
+                                                                "max_level_shift"),
+                                                   selected.features = c("entropy", "stability", "trend", 
+                                                                         "max_level_shift"),
+                                                   target = c(0.5, 3, 0.05, 3.5)))
+    
     sim_historical[[i]] <- cbind.data.frame(series   = sim_ts,
                                             time     = seq(1:t),
                                             lag1     = lead(sim_ts, n = 1),
@@ -52,13 +107,19 @@ data_gen_v1 <- function(n,t){
   sim_historical <- sim_historical[sim_hist_cc,]
   
   #Construct individual time-series
-  W <- cbind.data.frame(id       = rep(n+1, 1),
+  W <- cbind.data.frame(id       = rep(n+1, t),
                         sex      = rbinom(n = 1, size = 1, prob = 0.5),
                         age      = round(runif(n = 1, min = 19, max=90)),
                         care_unit = round(runif(n = 1, min = 0, max=2)))
   
   sim_ts <- as.numeric(75 + ts_offset(W) + 
-                         arima.sim(model=list(ma=c(-0.5,-0.3,-0.1,0.2,0.5)),n=t))
+                         generate_ts_with_target(n = 1, ts.length = t, freq = 1, seasonal = 0,
+                                                 features = c("entropy", "stability", "stl_features", 
+                                                              "max_level_shift"),
+                                                 selected.features = c("entropy", "stability", "trend", 
+                                                                       "max_level_shift"),
+                                                 target = c(0.5, 0.05, 0.05, 0.5)))
+  
   sim_individual <- cbind.data.frame(series   = sim_ts,
                                      time     = seq(1:t),
                                      lag1     = lead(sim_ts, n = 1),
@@ -77,26 +138,6 @@ data_gen_v1 <- function(n,t){
               historical=sim_historical, 
               individual=sim_individual))
 }
-
-### Create a compatible arimax process:
-#load(here::here("Data/fin_history60_subset.Rdata"))
-#data <- fin_history60_subset
-
-#Limit data to the first 5 hours
-#dat <- data %>%
-#  dplyr::group_by(subject_id) %>%
-#  dplyr::mutate(time=1:n()) %>%
-#  dplyr::filter(min_elapsed <= 300)
-
-#Exclude samples with time gaps (can't model with ARIMA)
-#dat_no_gap <- dat %>% 
-#  dplyr::mutate(time_count = n()) %>%
-#  dplyr::filter(time_count == 300)
-
-#data <- dat_no_gap[,c("subject_id", "sex", "age", "care_unit", "abpmean")]
-#data$sex <- ifelse(data$sex=="M", 1, 0)
-#data$care_unit <- ifelse(data$care_unit=="CCU", 0, ifelse(data$care_unit=="CSRU", 1, 2))
-#fit_arimax <- auto.arima(y = data$abpmean, xreg = as.matrix(data[,2:4]))
 
 ##########################################################################################
 #                                 Run simulations 
@@ -148,7 +189,7 @@ for(m in 1:MC){
   paste0("Iteration: ", m)
   
   ### Simulate data:
-  data <- data_gen_v1(n=n,t=t)
+  data <- data_gen_v3(n=n,t=t)
   splits <- seq(10,520,20)
   
   res <- run_posl(data=data, covs=covs, outcome=outcome, 
@@ -162,4 +203,6 @@ for(m in 1:MC){
 }
 
 save.image(file = here::here("Simulations/ARIMA/Results", 
-                             paste0("fit_W_offset_stationary_v3.Rdata")), compress = TRUE)
+                             paste0("fit_MAR_v3.Rdata")), compress = TRUE)
+
+

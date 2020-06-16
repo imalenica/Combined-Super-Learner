@@ -17,7 +17,7 @@ require(smooth)
 #Load Combined SL
 file.sources = list.files(path=here("R/v3/"),pattern="*.R")
 sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
-source(here("Simulations/ARIMA/sims_functions.R"))
+source(here("Simulations/ARIMA/R/sims_functions.R"))
 
 data_gen_v2 <- function(n,t){
   sim_historical <- list() 

@@ -1,4 +1,4 @@
-### ARIMA simulations with no W
+### ARIMA simulations with common W
 
 options(warn=-1)
 #remotes::install_github("tlverse/sl3@timeseries-overhaul")
@@ -17,9 +17,9 @@ require(smooth)
 #Load Combined SL
 file.sources = list.files(path=here("R/v3/"),pattern="*.R")
 sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
-source(here("Simulations/ARIMA/sims_functions.R"))
+source(here("Simulations/ARIMA/R/sims_functions.R"))
 
-data_gen_v0 <- function(n,t){
+data_gen_v1 <- function(n,t){
   sim_historical <- list() 
   ts_offset <- function(W){
     start <- 0.5*W[,"care_unit"] + 0.02*W[,"age"] + 0.5*W[,"sex"]
@@ -28,12 +28,12 @@ data_gen_v0 <- function(n,t){
   
   #Construct historical time-series
   for(i in 1:n){
-    W <- cbind.data.frame(id        = rep(i, t),
-                          sex       = rbinom(n = t, size = 1, prob = 0.5),
-                          age       = round(runif(n = t, min = 19, max=90)),
+    W <- cbind.data.frame(id       = rep(i, t),
+                          sex      = rbinom(n = t, size = 1, prob = 0.5),
+                          age      = round(runif(n = t, min = 19, max=90)),
                           care_unit = round(runif(n = t, min = 0, max=2)))
     
-    sim_ts <- as.numeric(75 + 
+    sim_ts <- as.numeric(75 + ts_offset(W) + 
                            arima.sim(model=list(ar=c(0.6,0.4,0.1,-0.1,-0.05)),n=t))
     sim_historical[[i]] <- cbind.data.frame(series   = sim_ts,
                                             time     = seq(1:t),
@@ -57,7 +57,7 @@ data_gen_v0 <- function(n,t){
                         age      = round(runif(n = 1, min = 19, max=90)),
                         care_unit = round(runif(n = 1, min = 0, max=2)))
   
-  sim_ts <- as.numeric(75 + 
+  sim_ts <- as.numeric(75 + ts_offset(W) + 
                          arima.sim(model=list(ma=c(-0.5,-0.3,-0.1,0.2,0.5)),n=t))
   sim_individual <- cbind.data.frame(series   = sim_ts,
                                      time     = seq(1:t),
@@ -68,7 +68,6 @@ data_gen_v0 <- function(n,t){
                                      lag5     = lead(sim_ts, n = 5),
                                      W,
                                      Y        = lead(sim_ts, n = 15))
-  
   #Construct full data set
   sim_all <- rbind.data.frame(sim_historical, sim_individual)
   sim_all_cc <- complete.cases(sim_all)
@@ -103,7 +102,7 @@ data_gen_v0 <- function(n,t){
 #                                 Run simulations 
 ##########################################################################################
 
-set.seed(1111)
+set.seed(11)
 
 ### set up learners 
 grid_params = list(max_depth = c(5,8),
@@ -149,12 +148,12 @@ for(m in 1:MC){
   paste0("Iteration: ", m)
   
   ### Simulate data:
-  data <- data_gen_v0(n=n,t=t)
+  data <- data_gen_v1(n=n,t=t)
   splits <- seq(10,520,20)
   
   res <- run_posl(data=data, covs=covs, outcome=outcome, 
                   learners=learners, splits=splits)
-    
+  
   ts_data[[m]]        <- data
   sl_discrete[[m]]    <- res$res_discrete
   sl_nnls_convex[[m]] <- res$res_nnls_convex
@@ -163,6 +162,4 @@ for(m in 1:MC){
 }
 
 save.image(file = here::here("Simulations/ARIMA/Results", 
-                             paste0("fit_stationary_v3.Rdata")), compress = TRUE)
-  
-
+                             paste0("fit_W_offset_stationary_v3.Rdata")), compress = TRUE)
