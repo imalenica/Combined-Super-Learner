@@ -8,7 +8,7 @@
 # online_stack: stack of sl3 learners to model historical data  
 # id: column name indicating unique subject identifier
 
-make_online_sl <- function(online_data, outcome, covariates, id,
+make_online_sl <- function(online_data, outcome, covariates, id, 
                            online_stack,  parallelize = FALSE, 
                            cpus_logical = NULL, fit_sl = TRUE){
   

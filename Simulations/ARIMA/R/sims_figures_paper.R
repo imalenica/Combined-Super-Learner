@@ -17,6 +17,7 @@ get_legend<-function(myggplot){
 load(here("Simulations/ARIMA/Results/fit_mixture_stationary_v3_summary.Rdata"))
 load(here("Simulations/ARIMA/Results/fit_stationary_v3_summary.Rdata"))
 load(here("Simulations/ARIMA/Results/fit_W_offset_stationary_v3_summary.Rdata"))
+load(here("Simulations/ARIMA/Results/fit_MAR_v3_summary.Rdata"))
 
 #################################################################
 ### Plot majority weights (Historical vs. Individual learners)
@@ -33,7 +34,7 @@ p0 <- ggplot() +
                 col = "red"), size=sz) +
   xlab("") + ylab("Sum of ensemble weights") + 
   scale_color_discrete(name = "Learner", labels = c("Historical SL", "Individual SL")) +
-  ggtitle("(a) ARMA process") +
+  ggtitle("(a) ARIMA process") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -52,7 +53,7 @@ p1 <- ggplot() +
                 y = res_nnls_convex_v1$`Individual SL`,
                 col = "red"), size=sz) +
   xlab(" ") + ylab(" ") +
-  ggtitle("(b) ARMA process with X-dependent offset") +
+  ggtitle("(b) ARIMA process with X-dependent offset") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -71,7 +72,7 @@ p2 <- ggplot() +
                 y = res_nnls_convex_v2$`Individual SL`,
                 col = "red"), size=sz) +
   xlab("Time") + ylab("Sum of ensemble weights") +
-  ggtitle("(c) Interrupted ARMA process") +
+  ggtitle("(c) Interrupted ARIMA process") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -83,11 +84,11 @@ p2 <- ggplot() +
         panel.grid = element_line(colour = "grey92"))
 
 p3 <- ggplot() + 
-  geom_line(aes(x = parse_number(row.names(res_nnls_convex_v2)),
-                y = res_nnls_convex_v2$`Historical SL`,
+  geom_line(aes(x = parse_number(row.names(res_nnls_convex_v3)),
+                y = res_nnls_convex_v3$`Historical SL`,
                 col = "blue"), size=sz) +
-  geom_line(aes(x = parse_number(row.names(res_nnls_convex_v2)),
-                y = res_nnls_convex_v2$`Individual SL`,
+  geom_line(aes(x = parse_number(row.names(res_nnls_convex_v3)),
+                y = res_nnls_convex_v3$`Individual SL`,
                 col = "red"), size=sz) +
   xlab("Time") + ylab(" ") +
   ggtitle("(d) Mixture of Gaussian AR models") +
@@ -126,7 +127,7 @@ p0 <- ggplot() +
                                 'Individual SL' = 'gray', 'Personalized SL' = 'black'),
                      name="Super Learner") +
   ylab("MSE") + xlab(" ") + 
-  labs(title = "(a) ARMA process") +
+  labs(title = "(a) ARIMA process") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -154,7 +155,7 @@ p1 <- ggplot() +
                                 'Individual SL' = 'gray', 'Personalized SL' = 'black'),
                      name="Super Learner") +
   ylab(" ") + xlab(" ") + 
-  labs(title = "(b) ARMA process with X-dependent offset") +
+  labs(title = "(b) ARIMA process with X-dependent offset") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -182,7 +183,7 @@ p2 <- ggplot() +
                                 'Individual SL' = 'gray', 'Personalized SL' = 'black'),
                      name="Super Learner") +
   xlab("Time") + ylab("MSE") +
-  labs(title = "(c) Interrupted ARMA process") +
+  labs(title = "(c) Interrupted ARIMA process") +
   theme(text = element_text(size=20),
         axis.text.x = element_text(face="bold", angle=90, hjust=1),
         axis.title.x = element_text(color="black", size=14, face="bold"),
@@ -194,17 +195,17 @@ p2 <- ggplot() +
         panel.grid = element_line(colour = "grey92"))
 
 p3 <- ggplot() + 
-  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v2)),
-                y = loss_nnls_convex_v2$`Pooled SL`,
+  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v3)),
+                y = loss_nnls_convex_v3$`Pooled SL`,
                 col = "Pooled SL"), size=sz2) +
-  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v2)),
-                y = loss_nnls_convex_v2$`Historical SL`,
+  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v3)),
+                y = loss_nnls_convex_v3$`Historical SL`,
                 col = "Historical SL"), size=sz2) +
-  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v2)),
-                y = loss_nnls_convex_v2$`Individual SL`,
+  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v3)),
+                y = loss_nnls_convex_v3$`Individual SL`,
                 col = "Individual SL"), size=sz2) +
-  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v2)),
-                y = loss_nnls_convex_v2$`Personalized SL`,
+  geom_line(aes(x = as.numeric(row.names(loss_nnls_convex_v3)),
+                y = loss_nnls_convex_v3$`Personalized SL`,
                 col = "Personalized SL"), size=sz2) +
   scale_color_manual(values = c('Pooled SL' = 'blue', 'Historical SL' = 'red',
                                 'Individual SL' = 'gray', 'Personalized SL' = 'black'),
