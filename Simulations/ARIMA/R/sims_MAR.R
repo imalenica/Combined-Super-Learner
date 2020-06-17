@@ -84,11 +84,9 @@ data_gen_v3 <- function(n,t){
     
     sim_ts <- as.numeric(75 + ts_offset(W) + 
                            generate_ts_with_target(n = 1, ts.length = t, freq = 1, seasonal = 0,
-                                                   features = c("entropy", "stability", "stl_features", 
-                                                                "max_level_shift"),
-                                                   selected.features = c("entropy", "stability", "trend", 
-                                                                         "max_level_shift"),
-                                                   target = c(0.5, 3, 0.05, 3.5)))
+                                                   features = c("entropy", "stability", "stl_features"),
+                                                   selected.features = c("entropy", "stability", "trend"),
+                                                   target = c(0.7, 1.7, 0.05)))
     
     sim_historical[[i]] <- cbind.data.frame(series   = sim_ts,
                                             time     = seq(1:t),
@@ -114,11 +112,9 @@ data_gen_v3 <- function(n,t){
   
   sim_ts <- as.numeric(75 + ts_offset(W) + 
                          generate_ts_with_target(n = 1, ts.length = t, freq = 1, seasonal = 0,
-                                                 features = c("entropy", "stability", "stl_features", 
-                                                              "max_level_shift"),
-                                                 selected.features = c("entropy", "stability", "trend", 
-                                                                       "max_level_shift"),
-                                                 target = c(0.5, 0.05, 0.05, 0.5)))
+                                                 features = c("entropy", "stability", "stl_features"),
+                                                 selected.features = c("entropy", "stability", "trend"),
+                                                 target = c(0.7, 0.1, 0.05)))
   
   sim_individual <- cbind.data.frame(series   = sim_ts,
                                      time     = seq(1:t),
@@ -173,7 +169,7 @@ learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm),
 ### set up parameters
 t=60*9
 n=30
-MC=50
+MC=5
 
 ### set up variables
 covs <- c("sex","age","care_unit","lag1","lag2","lag3","lag4","lag5")
