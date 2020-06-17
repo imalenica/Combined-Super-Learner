@@ -38,12 +38,12 @@ run_posl <- function(data, covs, outcome, learners, splits){
     id = "id", 
     historical_stack = learners
   )
-  
+
   split_data <- lapply(splits, function(x) data.table(data_individual[1:x,]))
   split_datas <- lapply(splits, function(x){
     data_full %>%
       dplyr::group_by(id) %>%
-      dplyr::top_n(x)
+      dplyr::slice(c(1:x))
   })
     
   for(i in 1:length(splits)){
@@ -125,4 +125,55 @@ run_posl <- function(data, covs, outcome, learners, splits){
               res_nnls=res_nnls,
               loss=loss))
  
+}
+
+folds_rolling_origin_pooled_edit <- function(n, t, id = NULL, time = NULL,
+                                        first_window, validation_size,
+                                        gap = 0, batch = 1) {
+  if ((!is.null(id) & is.null(time)) | (is.null(id) & !is.null(time))) {
+    stop("Cannot create flexible folds (allow for variability in the amount of 
+         time observed for each id) unless both `time` and `id` argments are 
+         provided. Either provide both `time` and `id` or neither.")
+  }
+  if ((length(id) != length(time)) & (length(id) > 1)) {
+    stop("Cannot create flexible folds (allow for variability in the amount of 
+         `time` observed for each `id`) unless `time` vector is of same length 
+         as `id` vector. `time` is a vector of integers of time points observed 
+         for each subject, and `id` is a vector of unique identifiers which
+         correspond to the time vector. The `id` vector is used to subset the 
+         `time` vector.")
+  }
+  if (length(id) == 1) {
+    id <- rep(id, length(time))
+  }
+  
+  if (is.null(id) & is.null(time)) {
+    dat <- cbind.data.frame(
+      time = rep(seq(t), n / t),
+      id = rep(seq(n / t), each = t)
+    )
+  } else {
+    # Index times by id (allows variability in time observed for each subject)
+    dat <- cbind.data.frame(time = time, id = id)
+  }
+  
+  ids <- unique(dat$id)
+  times <- unique(dat$time)
+  
+  message(paste("Processing", length(ids), "samples with", t, "time points."))
+  
+  # establish rolling origin forecast for time-series cross-validation
+  rolling_origin_skeleton <- folds_rolling_origin(
+    t, first_window,
+    validation_size, gap, batch
+  )
+  
+  folds_rolling_origin <- lapply(rolling_origin_skeleton, function(fold) {
+    train_times <- training(times)
+    valid_times <- validation(times)
+    train_idx <- which(dat$time%in%train_times)
+    valid_idx <- which(dat$time%in%valid_times)
+    fold <- make_fold(fold_index(), train_idx, valid_idx)
+  })
+  return(folds_rolling_origin)
 }

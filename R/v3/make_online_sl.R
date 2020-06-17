@@ -13,13 +13,25 @@ make_online_sl <- function(online_data, outcome, covariates, id,
                            cpus_logical = NULL, fit_sl = TRUE){
   
   # make folds with training data
-  folds <- origami::make_folds(data.table(online_data), 
-                               fold_fun = folds_rolling_origin,
-                               first_window = 5, 
-                               validation_size = 5, 
-                               gap = 0,
-                               batch = 5
-  )
+  #folds <- origami::make_folds(data.table(online_data), 
+  #                             fold_fun = folds_rolling_origin_pooled,
+  #                             id = online_data[,id],
+  #                             t = max(online_data[,"time"]),
+  #                             time=online_data[,"time"],
+  #                             first_window = 5,
+  #                             validation_size = 5, 
+  #                             gap = 0, 
+  #                             batch = 5
+  #)
+  
+  folds <- folds_rolling_origin_pooled_edit(n=nrow(online_data),
+                                            id = online_data[,id],
+                                            t = max(online_data[,"time"]),
+                                            time=online_data[,"time"],
+                                            first_window = 5,
+                                            validation_size = 5, 
+                                            gap = 0, 
+                                            batch = 5)
   
   task <- make_sl3_Task(
     data = data.table(online_data), 
