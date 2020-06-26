@@ -1,4 +1,4 @@
-### ARIMA simulations with no W
+### All DGP: get predictions
 
 options(warn=-1)
 #remotes::install_github("tlverse/sl3@timeseries-overhaul")
@@ -19,26 +19,6 @@ file.sources = list.files(path=here("R/v3/"),pattern="*.R")
 sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
 source(here("Simulations/ARIMA/R/sims_functions.R"))
 source(here("Simulations/ARIMA/R/sims_data_gen.R"))
-
-### Create a compatible arimax process:
-#load(here::here("Data/fin_history60_subset.Rdata"))
-#data <- fin_history60_subset
-
-#Limit data to the first 5 hours
-#dat <- data %>%
-#  dplyr::group_by(subject_id) %>%
-#  dplyr::mutate(time=1:n()) %>%
-#  dplyr::filter(min_elapsed <= 300)
-
-#Exclude samples with time gaps (can't model with ARIMA)
-#dat_no_gap <- dat %>% 
-#  dplyr::mutate(time_count = n()) %>%
-#  dplyr::filter(time_count == 300)
-
-#data <- dat_no_gap[,c("subject_id", "sex", "age", "care_unit", "abpmean")]
-#data$sex <- ifelse(data$sex=="M", 1, 0)
-#data$care_unit <- ifelse(data$care_unit=="CCU", 0, ifelse(data$care_unit=="CSRU", 1, 2))
-#fit_arimax <- auto.arima(y = data$abpmean, xreg = as.matrix(data[,2:4]))
 
 ##########################################################################################
 #                                 Run simulations 
@@ -74,36 +54,35 @@ learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm),
 ### set up parameters
 t=60*9
 n=30
-MC=50
 
 ### set up variables
 covs <- c("sex","age","care_unit","lag1","lag2","lag3","lag4","lag5")
 outcome <- "Y"
+splits <- seq(10,520,20)
 
-ts_data <- list()
-sl_discrete <- list()
-sl_nnls_convex <- list()
-sl_nnls <- list()
-loss <- list()
+### Simulation 0:
+data <- data_gen_v0(n=n,t=t)
+res_sim0 <- run_posl(data=data, covs=covs, outcome=outcome, 
+                learners=learners, splits=splits, return_preds = TRUE)
+preds_sim0 <- res_sim0$cv_preds
 
-for(m in 1:MC){
-  paste0("Iteration: ", m)
-  
-  ### Simulate data:
-  data <- data_gen_v0(n=n,t=t)
-  splits <- seq(10,520,20)
-  
-  res <- run_posl(data=data, covs=covs, outcome=outcome, 
-                  learners=learners, splits=splits)
-    
-  ts_data[[m]]        <- data
-  sl_discrete[[m]]    <- res$res_discrete
-  sl_nnls_convex[[m]] <- res$res_nnls_convex
-  sl_nnls[[m]]        <- res$res_nnls 
-  loss[[m]]           <- res$loss
-}
+### Simulation 1:
+data <- data_gen_v1(n=n,t=t)
+res_sim1 <- run_posl(data=data, covs=covs, outcome=outcome, 
+                     learners=learners, splits=splits, return_preds = TRUE)
+preds_sim1 <- res_sim1$cv_preds
+
+### Simulation 2:
+data <- data_gen_v2(n=n,t=t)
+res_sim2 <- run_posl(data=data, covs=covs, outcome=outcome, 
+                     learners=learners, splits=splits, return_preds = TRUE)
+preds_sim2 <- res_sim2$cv_preds
+
+### Simulation 3:
+data <- data_gen_v3(n=n,t=t)
+res_sim3 <- run_posl(data=data, covs=covs, outcome=outcome, 
+                     learners=learners, splits=splits, return_preds = TRUE)
+preds_sim3 <- res_sim3$cv_preds
 
 save.image(file = here::here("Simulations/ARIMA/Results", 
-                             paste0("fit_stationary_v4.Rdata")), compress = TRUE)
-  
-
+                             paste0("fit_preds_extra_v4.Rdata")), compress = TRUE)

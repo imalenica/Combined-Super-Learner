@@ -1,6 +1,6 @@
 ### Functions to support simulations
 
-run_posl <- function(data, covs, outcome, learners, splits){
+run_posl <- function(data, covs, outcome, learners, splits, return_preds=FALSE){
   
   data_full <- data$full
   data_historical <- data$historical
@@ -20,6 +20,7 @@ run_posl <- function(data, covs, outcome, learners, splits){
   result_online_forecasts <- list()
   
   loss                    <- list()
+  forecast                <- list()
   
   ### Learn the full fit with V-fold CV
   full_fit <- make_historical_sl(
@@ -105,6 +106,13 @@ run_posl <- function(data, covs, outcome, learners, splits){
                                   indSL  = apply(result_ind_forecasts[[i]], 1, mse),
                                   onlSL  = apply(result_online_forecasts[[i]], 1, mse),
                                   persSL = apply(result_forecasts[[i]], 1, mse))
+    
+    forecast[[i]] <- cbind.data.frame(truth=truth,
+                                      VfoldSL = result_Vfold_forecasts[[i]][2,],
+                                      histSL  = result_hist_forecasts[[i]][2,],
+                                      indSL   = result_ind_forecasts[[i]][2,],
+                                      onlSL   = result_online_forecasts[[i]][2,],
+                                      persSL  = result_forecasts[[i]][2,])
     }
   
   #Save only results for POSL
@@ -120,10 +128,22 @@ run_posl <- function(data, covs, outcome, learners, splits){
   res_nnls <- do.call(cbind, res_nnls)
   colnames(res_nnls) <- paste0("t=", splits)
   
-  return(list(res_discrete=res_discrete,
-              res_nnls_convex=res_nnls_convex,
-              res_nnls=res_nnls,
-              loss=loss))
+  #CV-based predictions
+  if(return_preds){
+    fin_i <- length(splits)
+    cv_preds <- cbind.data.frame(truth   = result_list[[fin_i]]$sl_truth,
+                                 result_list[[fin_i]]$sl_pred)
+  }else{
+    cv_preds <- NULL
+  }
+  
+  return(list(res_discrete    = res_discrete,
+              res_nnls_convex = res_nnls_convex,
+              res_nnls        = res_nnls,
+              loss            = loss,
+              forecast        = forecast,
+              cv_preds        = cv_preds
+              ))
  
 }
 

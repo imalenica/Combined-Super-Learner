@@ -18,67 +18,7 @@ require(smooth)
 file.sources = list.files(path=here("R/v3/"),pattern="*.R")
 sapply(paste(here("R/v3"), file.sources, sep="/"),source,.GlobalEnv)
 source(here("Simulations/ARIMA/R/sims_functions.R"))
-
-data_gen_v2 <- function(n,t){
-  sim_historical <- list() 
-  ts_offset <- function(W){
-    start <- 0.5*W[,"care_unit"] + 0.02*W[,"age"] + 0.5*W[,"sex"]
-    return(start)
-  }
-  
-  #Construct historical time-series
-  for(i in 1:n){
-    W <- cbind.data.frame(id       = rep(i, t),
-                          sex      = rbinom(n = t, size = 1, prob = 0.5),
-                          age      = round(runif(n = t, min = 19, max=90)),
-                          care_unit = round(runif(n = t, min = 0, max=2)))
-    
-    sim_ts <- as.numeric(75 + ts_offset(W) + 
-                           arima.sim(model=list(ar=c(0.6,0.4,0.1,-0.1,-0.05)),n=t))
-    sim_historical[[i]] <- cbind.data.frame(series   = sim_ts,
-                                            time     = seq(1:t),
-                                            lag1     = lead(sim_ts, n = 1),
-                                            lag2     = lead(sim_ts, n = 2),
-                                            lag3     = lead(sim_ts, n = 3),
-                                            lag4     = lead(sim_ts, n = 4),
-                                            lag5     = lead(sim_ts, n = 5),
-                                            W,
-                                            Y        = lead(sim_ts, n = 15))
-    
-  }
-  #Remove NAs: issues with sl3
-  sim_historical <- do.call(rbind,sim_historical)
-  sim_hist_cc <- complete.cases(sim_historical)
-  sim_historical <- sim_historical[sim_hist_cc,]
-  
-  #Construct individual time-series
-  W <- cbind.data.frame(id       = rep(n+1, 1),
-                        sex      = rbinom(n = 1, size = 1, prob = 0.5),
-                        age      = round(runif(n = 1, min = 19, max=90)),
-                        care_unit = round(runif(n = 1, min = 0, max=2)))
-  
-  sim_ts <- as.numeric(75 + ts_offset(W) + 
-                         c(arima.sim(model=list(ma=c(-0.5,-0.3,-0.1,0.2,0.5)),n=(2*t/3)),
-                           arima.sim(model=list(ar=c(0.6,0.4,0.1,-0.1,-0.05)),n=(1*t/3))))
-  sim_individual <- cbind.data.frame(series   = sim_ts,
-                                     time     = seq(1:t),
-                                     lag1     = lead(sim_ts, n = 1),
-                                     lag2     = lead(sim_ts, n = 2),
-                                     lag3     = lead(sim_ts, n = 3),
-                                     lag4     = lead(sim_ts, n = 4),
-                                     lag5     = lead(sim_ts, n = 5),
-                                     W,
-                                     Y        = lead(sim_ts, n = 15))
-  
-  #Construct full data set
-  sim_all <- rbind.data.frame(sim_historical, sim_individual)
-  sim_all_cc <- complete.cases(sim_all)
-  sim_all <- sim_all[sim_all_cc,]
-  
-  return(list(full=sim_all, 
-              historical=sim_historical, 
-              individual=sim_individual))
-}
+source(here("Simulations/ARIMA/R/sims_data_gen.R"))
 
 ### Create a compatible arimax process:
 #load(here::here("Data/fin_history60_subset.Rdata"))
@@ -134,7 +74,7 @@ learners <- make_learner(Stack, unlist(list(xgb_learners, lrnr_glm),
 ### set up parameters
 t=60*9
 n=30
-MC=50
+MC=28
 
 ### set up variables
 covs <- c("sex","age","care_unit","lag1","lag2","lag3","lag4","lag5")
@@ -146,7 +86,7 @@ sl_nnls_convex <- list()
 sl_nnls <- list()
 loss <- list()
 
-for(m in 1:MC){
+for(m in 17:MC){
   paste0("Iteration: ", m)
   
   ### Simulate data:
@@ -164,4 +104,4 @@ for(m in 1:MC){
 }
 
 save.image(file = here::here("Simulations/ARIMA/Results", 
-                             paste0("fit_mixture_stationary_v3.Rdata")), compress = TRUE)
+                             paste0("fit_mixture_stationary_v4.Rdata")), compress = TRUE)

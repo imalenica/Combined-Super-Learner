@@ -170,6 +170,8 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
     lags <- NA
   }
   
+  sl_truth <- truth
+  
   ############################ forecast with SLs ###############################
   
   # avoid issues with NA as outcome when outcome hasn't yet been observed
@@ -241,8 +243,10 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
     sl_ind_forecasts <- NULL
   }
   
-  return_list <- list(sl_forecasts = sl_forecasts,
-                      sl_weights = sl_weights,
+  return_list <- list(sl_forecasts   = sl_forecasts,
+                      sl_weights     = sl_weights,
+                      sl_truth       = sl_truth,
+                      sl_pred        = sl_pred,
                       individual_fit = ind_fit, 
                       historical_fit = historical_fit,
                       training_preds = training_preds,
