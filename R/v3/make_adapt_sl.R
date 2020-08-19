@@ -26,111 +26,96 @@
 # return_individual_fit: returns SL for just individual sl
 
 make_adapt_sl <- function(individual_training_data, indiviual_forecast_data, 
-                          outcome, covariates, historical_fit, id, 
-                          return_individual_fit=FALSE,
-                          individual_stack = NULL, past_individual_fit = NULL, 
-                          acf = FALSE, parallelize = FALSE, 
-                          cpus_logical = NULL) {
+                          outcome, covariates, historical_fit, id, time = "min",
+                          burn_in = 30, batch = NULL, past_individual_fit = NULL, 
+                          individual_stack = NULL, return_individual_fit = TRUE,
+                          acf = FALSE, parallelize = FALSE, ncores = NULL) {
   
-  if(parallelize & is.null(cpus_logical)){
-    print("Cannot parallelize when no `cpus_logical` provided")
-    parallelize <- FALSE
+  # check arguments
+  if( is.null(past_individual_fit) & is.null(individual_stack) ) {
+    stop("Individual fit and individual stack both missing. Provide ",
+         "individual_stack to initialize a new fit, and past_individual_fit ",
+         "to update with new data.")
   }
   
-  subject_id <- unique(individual_training_data[,id])
+  if(is.null(batch)){
+    batch <- nrow(indiviual_forecast_data)
+  }
+  
+  if(parallelize & is.null(ncores)){
+    print("Cannot parallelize when no `ncores` provided")
+    parallelize <- FALSE
+  }
   
   ################################## train SLs #################################
   
   # make folds with training data
   folds <- origami::make_folds(data.table(individual_training_data), 
                                fold_fun = folds_rolling_origin,
-                               first_window = 5, 
-                               validation_size = 5, 
+                               first_window = burn_in, 
+                               validation_size = batch, 
                                gap = 0,
-                               batch = 5
+                               batch = batch
                                )
 
-  training_task <- make_sl3_Task(
+  individual_training_task <- make_sl3_Task(
     data = data.table(individual_training_data), 
     covariates = covariates,
     outcome = outcome, 
     folds = folds,
-    id = id
+    time = time
     )
+  
   # issue with mismatch between historical and individual delta column:
-  training_task <- process_task(
-    individual_training_task = training_task, 
-    historical_task = historical_fit$cv_fit$fit_object$full_fit$training_task)
-
-  # fit initial superlearner if past_individual_fit is not provided
-  if(is.null(past_individual_fit) & is.null(individual_stack)) {
-    print("Error: Individual fit and individual stack both missing. Provide       
-           individual_stack to initialize a new fit, and past_individual_fit
-           to update with new data.")
-    stop()
- 
-    }else if(is.null(past_individual_fit) & !(is.null(individual_stack))) {
+  if(class(historical_fit) == "list"){
+    historical_task <- historical_fit$cv_fit$fit_object$full_fit$training_task
+  } else {
+    historical_task <- historical_fit$fit_object$full_fit$training_task
+  }
+  training_task <- process_task(individual_training_task, historical_task)
+  
+  # fit super learner if individual_stack is provided
+  if(!is.null(individual_stack)){
     
-    print(paste0("Training learners for subject ", subject_id, 
-                 " with ", nrow(individual_training_data), " observations."))
-    
-    # fit individualized learners
-    cv_stack <- Lrnr_cv$new(individual_stack)
-    if(parallelize){
-      plan(multicore, workers = cpus_logical)
-      test <- delayed_learner_train(cv_stack, training_task)
-      sched <- Scheduler$new(test, FutureJob, nworkers = cpus_logical,
-                             verbose = FALSE)
-      ind_fit <- sched$compute()
+    if(grepl("Lrnr_cv", class(individual_stack)[1])){ # already a cv stack
+      cv_stack <- individual_stack 
     } else {
-      ind_fit <- cv_stack$train(training_task)
+      cv_stack <- Lrnr_cv$new(individual_stack)
     }
     
-    }else if(!is.null(past_individual_fit) & is.null(individual_stack)) {
-    print(paste0("Updating past fit for subject ", subject_id, " with ", 
-                 nrow(individual_training_data), " observations."))
-    
-    # update individualized learners
-    ind_fit <- past_individual_fit$update(training_task)
-    
-    } else if(!is.null(past_individual_fit) & !is.null(individual_stack)) {
-    print(paste0("Ignoring past fit and training individual_stack for subject ",
-                 subject_id, " with ", nrow(individual_training_data), 
-                 " observations."))
-  
-      # fit individualized learners
-      cv_stack <- Lrnr_cv$new(individual_stack)
-      if(parallelize){
-        plan(multicore, workers = cpus_logical)
-        test <- delayed_learner_train(cv_stack, training_task)
-        sched <- Scheduler$new(test, FutureJob, nworkers = cpus_logical,
-                               verbose = FALSE)
-        ind_fit <- sched$compute()
+    if(parallelize){
+      plan(multicore, workers = ncores)
+      ind_delayed <- delayed_learner_train(cv_stack, training_task)
+      sched <- Scheduler$new(ind_delayed, FutureJob, nworkers = ncores)
+      ind_fit <- sched$compute()
       } else {
-        ind_fit <- cv_stack$train(training_task)
+      ind_fit <- cv_stack$train(training_task)
       }
+    
+    } else {
+      # update individualized learners
+      ind_fit <- past_individual_fit$update(training_task)
     }
   
   # predict with individualized learners and historical learners
   ind_preds <- ind_fit$predict(training_task)
   
   if(class(historical_fit) == "list"){
-    #Omit the task
+    # -1 to omit the task returned by make_historical_sl when fit_sl = TRUE
     historical_fits <- historical_fit[1:(length(historical_fit)-1)]
-    
-    hist_preds <- bind_rows(lapply(folds, function(fold) {
+    hist_preds <- bind_rows(lapply(folds, function(fold){
       test_set_in_training_task <- validation_task(training_task, fold)
-      hist_fits <- cbind.data.frame(lapply(historical_fits, function(fit){
+      cbind.data.frame(lapply(historical_fits, function(fit){
         fit$predict_fold(test_set_in_training_task, "full")
       }))
     }))
   } else {
-    hist_preds <- bind_rows(lapply(folds, function(fold) {
+    hist_preds <- bind_rows(lapply(folds, function(fold){
       test_set_in_training_task <- validation_task(training_task, fold)
       historical_fit$predict_fold(test_set_in_training_task, "full")
       }))
   }
-  # historical_fit$fit_object$full_fit$learner_fits$Lrnr_screener_coefs_0.1$fit_object$selected
+
   # combine predictions
   learners <- c(paste0("historical_", colnames(hist_preds)),
                 paste0("individual_", colnames(ind_preds)))
@@ -138,39 +123,36 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   names(training_preds) <- learners
 
   # get true Y
-  truth <- lapply(folds, function(i) data.frame(individual_training_data[i$validation,
-                                                                         get(outcome)]))
+  truth <- lapply(folds, function(v){
+    data.frame(individual_training_data[v$validation, get(outcome)])
+    })
   truth <- bind_rows(truth)[,1]
   
   # evaluate empirical loss for training
   loss <- apply(training_preds, 2, function(pred) mean((pred-truth)^2))
-  
   # establish various super learners
-  weights_discrete <- suppressWarnings(get_weights(training_preds, truth, 
-                                                   loss, convex, discrete = T))
-  weights_nnls_convex <- suppressWarnings(get_weights(training_preds, truth, 
-                                                      loss, convex = T, discrete = F))
-  weights_nnls <- suppressWarnings(get_weights(training_preds, truth, loss))
-  sl_weights <- suppressWarnings(rbind(weights_discrete, weights_nnls_convex, weights_nnls))
-  colnames(sl_weights) <- names(training_preds)
-  
+  sl_weights <- sl_weights_fit(training_preds, truth, loss)
   # use sl weights for prediction with sl
-  pred_discrete <- as.matrix(training_preds) %*% weights_discrete
-  pred_nnls_convex <- as.matrix(training_preds) %*% weights_nnls_convex
-  pred_nnls <- as.matrix(training_preds) %*% weights_nnls
-  sl_pred <- data.frame(pred_discrete, pred_nnls_convex, pred_nnls)
-  colnames(sl_pred) <- c("discreteSL", "nnls_convexSL", "nnls_SL")
+  sl_pred <- sl_weights_predict(sl_weights, training_preds)
   
-  # check dependence (option to use get_acf function)
+  if(return_individual_fit){
+    # evaluate empirical loss and weights just for individual learners
+    ind_loss <- apply(ind_preds, 2, function(pred) mean((pred-truth)^2))
+    sl_ind_weights <- sl_weights_fit(ind_preds, truth, ind_loss)
+    sl_ind_pred <- sl_weights_predict(sl_ind_weights, ind_preds)
+  } else {
+    ind_loss <- NA
+    sl_ind_weights <- NA
+    sl_ind_pred <- NA
+  }
+  
   if(acf){
-    # get the residuals
+    # get the residuals -- check dependence (option to use get_acf function)
     residuals <- apply(sl_pred, 2, function(pred) (pred-truth))
     lags <- apply(residuals, 2, get_acf)
   } else {
     lags <- NA
   }
-  
-  sl_truth <- truth
   
   ############################ forecast with SLs ###############################
   
@@ -179,21 +161,25 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   forecast_data <- data.table(unknown_outcome, indiviual_forecast_data)
   
   # obtain forecast with individual fit and historical fit
-  forecast_fold <- origami:: make_folds(forecast_data, fold_fun = folds_vfold, 
-                                        V = 1)
+  forecast_fold <- make_folds(forecast_data, fold_fun=folds_vfold, V=1)
   forecast_task <- make_sl3_Task(
     data = data.table(forecast_data), 
     covariates = covariates,
     outcome = "unknown_outcome", 
-    folds = forecast_fold,
-    id = id
+    folds = forecast_fold
   )
-  
+
   ind_forecast <- ind_fit$predict(forecast_task)
-  historical_fits <- historical_fit[1:4]
-  hist_forecast <- cbind.data.frame(lapply(historical_fits, function(fit){
+  
+  if(class(historical_fit) == "list"){
+    # -1 to omit the task returned by make_historical_sl when fit_sl = TRUE
+    historical_fits <- historical_fit[1:(length(historical_fit)-1)]
+    hist_forecast <- cbind.data.frame(lapply(historical_fits, function(fit){
       fit$predict(forecast_task)
     }))
+  } else {
+    hist_forecast <- historical_fit$predict(forecast_task, "full")
+  }
   
   # combine forecasts
   learners <- c(paste0("historical_", colnames(hist_forecast)),
@@ -202,62 +188,33 @@ make_adapt_sl <- function(individual_training_data, indiviual_forecast_data,
   names(forecast) <- learners
   
   # use sl weights for forecast with sl
-  forecast_discrete <- as.matrix(forecast) %*% weights_discrete
-  forecast_nnls_convex <- as.matrix(forecast) %*% weights_nnls_convex
-  forecast_nnls <- as.matrix(forecast) %*% weights_nnls
-  sl_forecasts <- data.frame(forecast_discrete, forecast_nnls_convex, forecast_nnls)
-  colnames(sl_forecasts) <- c("discreteSL", "nnls_convexSL", "nnls_SL")
-  
-  ############################ just individual SL ###############################
+  sl_forecasts <- sl_weights_predict(sl_weights, forecast)
+
+  # use ind_sl weights for forecast with ind_sl
   if(return_individual_fit){
-    # evaluate empirical loss just for individual learners
-    ind_loss <- apply(ind_preds, 2, function(pred) mean((pred-truth)^2))
-    
-    # establish various super learners
-    ind_weights_discrete <- suppressWarnings(get_weights(ind_preds, truth, 
-                                                     ind_loss, convex, discrete = T))
-    ind_weights_nnls_convex <- suppressWarnings(get_weights(ind_preds, truth, 
-                                                        ind_loss, convex = T, discrete = F))
-    ind_weights_nnls <- suppressWarnings(get_weights(ind_preds, truth, ind_loss))
-    sl_ind_weights <- suppressWarnings(rbind(ind_weights_discrete, ind_weights_nnls_convex, 
-                                             ind_weights_nnls))
-    colnames(sl_ind_weights) <- names(ind_preds)
-    
-    # use sl weights for prediction with sl
-    pred_ind_discrete <- as.matrix(ind_preds) %*% ind_weights_discrete
-    pred_ind_nnls_convex <- as.matrix(ind_preds) %*% ind_weights_nnls_convex
-    pred_ind_nnls <- as.matrix(ind_preds) %*% ind_weights_nnls
-    sl_ind_pred <- data.frame(pred_ind_discrete, pred_ind_nnls_convex, pred_ind_nnls)
-    colnames(sl_ind_pred) <- c("discreteSL", "nnls_convexSL", "nnls_SL")
-    
-    # forecast:
-    ind_forecast_discrete <- as.matrix(ind_forecast) %*% ind_weights_discrete
-    ind_forecast_nnls_convex <- as.matrix(ind_forecast) %*% ind_weights_nnls_convex
-    ind_forecast_nnls <- as.matrix(ind_forecast) %*% ind_weights_nnls
-    sl_ind_forecasts <- data.frame(ind_forecast_discrete, ind_forecast_nnls_convex, ind_forecast_nnls)
-    colnames(sl_ind_forecasts) <- c("discreteSL", "nnls_convexSL", "nnls_SL")
-    
-  }else{
-    ind_loss <- NULL
-    sl_ind_weights <- NULL
-    sl_ind_forecasts <- NULL
+    sl_ind_forecasts <- sl_weights_predict(sl_ind_weights, ind_forecast)
+  } else {
+    sl_ind_forecasts <- NA
   }
   
-  return_list <- list(sl_forecasts   = sl_forecasts,
-                      sl_weights     = sl_weights,
-                      sl_truth       = sl_truth,
-                      sl_pred        = sl_pred,
-                      individual_fit = ind_fit, 
-                      historical_fit = historical_fit,
-                      training_preds = training_preds,
-                      loss = loss, 
-                      lags=lags,
-                      #Return just individual predictions:
-                      sl_ind_forecasts=sl_ind_forecasts,
-                      sl_ind_weights=sl_ind_weights,
-                      ind_loss=ind_loss,
-                      #Forecast task:
-                      forecast_task = forecast_task)
-  
-  return(return_list)
+  return(list(
+    # return objects used for training adaptive/combined SL:
+    individual_fit = ind_fit,
+    historical_fit = historical_fit,
+    training_preds = training_preds, 
+    sl_truth = truth, 
+    loss = loss, 
+    sl_weights = sl_weights, 
+    sl_pred = sl_pred,
+    # return objects used for training individualized SL:
+    ind_loss = ind_loss,
+    sl_ind_weights = sl_ind_weights,
+    sl_ind_pred = sl_ind_pred,
+    # return optional acf info:
+    lags = lags,
+    # return forecast-related items (not used for training):
+    forecast_task = forecast_task,
+    sl_ind_forecasts = sl_ind_forecasts,
+    sl_forecasts = sl_forecasts
+    ))
 }
