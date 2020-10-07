@@ -1,28 +1,60 @@
 # solves issue with mismatch between historical and individual delta column
-process_task <- function(individual_training_task, historical_task){
+process_task <- function(training_task, historical_task, verbose = FALSE){
   
-  hist_cols <- names(historical_task$data)
-  ind_cols <- names(individual_training_task$data)
-  ind_cols_miss <- hist_cols[!(hist_cols %in% ind_cols)]
-
-  if(length(ind_cols_miss) > 0){
-  individual_training_data <- individual_training_task$data
-  ind_cols_miss_extra <- data.frame(matrix(nrow=nrow(individual_training_data), 
-                                           ncol=length(ind_cols_miss)))
-  names(ind_cols_miss_extra) <- ind_cols_miss[seq(ind_cols_miss)]
-  ind_cols_miss_extra[,ind_cols_miss] <- rep(0, nrow(individual_training_data))
-  ind_train_data_new <- cbind.data.frame(individual_training_data, 
-                                         ind_cols_miss_extra)
+  historical_cols <- colnames(historical_task$data)
+  training_cols <- colnames(training_task$data)
+  training_cols_missing <- historical_cols[!(historical_cols %in% training_cols)]
   
-  processed_task <- make_sl3_Task(
-    data = data.table(ind_train_data_new), 
-    covariates = historical_task$nodes$covariates,
-    outcome = individual_training_task$nodes$outcome,
-    folds = individual_training_task$folds,
-    id = "subject_id"
-  )
+  if(length(training_cols_missing) > 0){
+    
+    # print missing columns in training data
+    if(verbose){
+      print(paste(c("Columns to be added as 0 vectors to training data, ",
+                    "to avoid mismatch with historically-trained learners:", 
+                    training_cols_missing), collapse=" "))
+    }
+    
+    # make new data with additional columns that were previously missing
+    training_data <- training_task$data
+    missing_data <- data.frame(
+      matrix(nrow = nrow(training_data), ncol = length(training_cols_missing))
+    )
+    names(missing_data) <- training_cols_missing[seq(training_cols_missing)]
+    missing_data[,training_cols_missing] <- rep(0, nrow(training_data))
+    
+    # put together with training data
+    training_data_processed <- cbind.data.frame(training_data, missing_data)
+    
   } else {
-    processed_task <- individual_training_task
+    training_data_processed <- training_task$data
   }
-  return(processed_task)
+  
+  # make sure the training task has the nodes from the historical task
+  historical_covs <- historical_task$nodes$covariates
+  training_covs <- training_task$nodes$covariates
+  if(!all(historical_covs %in% training_covs)){
+    # print missing covariates in training task
+    if(verbose){
+      missing <- historical_covs[-which(historical_covs %in% training_covs)]
+      print(paste(c("Covariates to be added to training task covariates, ",
+                    "to avoid mismatch with covariates used for training ",
+                    "historically-trained learners:", missing), collapse=" "))
+    }
+    processed_covs <- unique(c(training_covs, historical_covs))
+  } else {
+    processed_covs <- training_covs
+  }
+  
+  # make new task
+  return(sl3::make_sl3_Task(
+    data = data.table(training_data_processed), 
+    covariates = processed_covs,
+    outcome = training_task$nodes$outcome,
+    id = training_task$nodes$id,
+    time = training_task$nodes$time,
+    weights = training_task$nodes$weights,
+    offset = training_task$nodes$offset,
+    folds = training_task$folds,
+    outcome_type = training_task$outcome_type$type
+  ))
 }
