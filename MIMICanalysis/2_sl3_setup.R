@@ -59,8 +59,10 @@ make_individual_cv_stack <- function(n = NULL, n_adaptive = TRUE) {
   
   arima_aicc <- Lrnr_arima$new(stepwise=FALSE, approximation=FALSE, ic="aicc")
   arima_bic <- Lrnr_arima$new(stepwise=FALSE, approximation=FALSE, ic="bic")
+  nlts_lstar15 <- Lrnr_tsDyn$new(learner="lstar", m=15, mTh=15)
   nlts_lstar <- Lrnr_tsDyn$new(learner="lstar", m=25, mTh=25)
-  nlts_setar <- Lrnr_tsDyn$new(learner="setar", m=25, model="MTAR", mTh=rep(1,25))
+  nlts_setar <- Lrnr_tsDyn$new(learner="setar", model="MTAR")
+  nlts_nnet15 <- Lrnr_tsDyn$new(learner="nnetTs", m=15, size=5)
   nlts_nnet <- Lrnr_tsDyn$new(learner="nnetTs", m=25, size=5)
   
   grid_params <- list(max_depth=c(3,5), eta=c(0.05,0.2), nrounds=c(50,100))
@@ -90,20 +92,22 @@ make_individual_cv_stack <- function(n = NULL, n_adaptive = TRUE) {
   # build off base_stack as n increases
   if(n_adaptive && !is.null(n)){
     if(n < 50){
-      stack <- make_learner(Stack, lasso_pipe, mean, nlts_lstar, nlts_setar,
-                            nlts_nnet, lasso)
+      stack <- make_learner(Stack, lasso_pipe, mean, nlts_lstar, nlts_setar, 
+                            nlts_nnet, nlts_lstar15, nlts_nnet15, lasso)
     } else if (n >= 50 && n < 200) {
       stack <- make_learner(
         Stack,
         unlist(list(glmnets, ranger, dbarts2, dbarts.5, lasso_pipe, mean, 
-                    nlts_lstar, nlts_setar, nlts_nnet), 
+                    nlts_lstar, nlts_setar, nlts_nnet, nlts_lstar15, 
+                    nlts_nnet15), 
                recursive = TRUE)
       )
     } else {
       stack <- make_learner(
         Stack,
         unlist(list(xgboosts, glmnets, ranger, dbarts2, dbarts.5, lasso_pipe, 
-                    mean, nlts_lstar, nlts_setar, nlts_nnet), 
+                    mean, nlts_lstar,nlts_setar, nlts_nnet, nlts_lstar15, 
+                    nlts_nnet15), 
                recursive = TRUE)
       )
     }
@@ -111,7 +115,8 @@ make_individual_cv_stack <- function(n = NULL, n_adaptive = TRUE) {
     stack <- make_learner(
       Stack,
       unlist(list(xgboosts, glmnets, ranger, dbarts2, dbarts.5, lasso_pipe, 
-                  mean, nlts_lstar, nlts_setar, nlts_nnet), 
+                  mean, nlts_lstar, nlts_setar, nlts_nnet, nlts_lstar15, 
+                  nlts_nnet15), 
              recursive = TRUE)
     )
   }
