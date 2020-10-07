@@ -8,31 +8,31 @@
 # historical_stack: stack of sl3 learners to model historical data  
 # id: column name indicating unique subject identifier for appropraite V-fold cv
 
-make_historical_sl <- function(historical_data, outcome, covariates, id,
-                               historical_stack, V = 5, parallelize = FALSE, 
-                               cpus_logical = NULL, fit_sl = TRUE){
+make_historical_sl <- function(historical_data, historical_stack, outcome, 
+                               covariates, id, drop_missing_outcome = TRUE,
+                               fit_sl = TRUE, folds = NULL, V = 5){
+ 
+  historical_data <- data.table::data.table(historical_data)
   
-  task <- make_sl3_Task(
-    data = historical_data, 
-    covariates = covariates,
-    outcome = outcome,
-    id = id,
-    drop_missing_outcome = T,
-    folds = origami::make_folds(historical_data, fold_fun = folds_vfold, V = V)
-  )
-  cv_stack <- Lrnr_cv$new(historical_stack, full_fit = TRUE)
-  if(parallelize){
-    plan(multicore, workers = cpus_logical)
-    test <- delayed_learner_train(cv_stack, task)
-    sched <- Scheduler$new(test, FutureJob, nworkers = cpus_logical,
-                           verbose = FALSE)
-    fit <- sched$compute()
-  } else {
-    fit <- cv_stack$train(task)
+  if(is.null(folds)){
+    folds <- origami::make_folds(
+      n = historical_data, cluster_ids = historical_data[[id]], V = V
+    )
   }
   
+  historical_task <- make_sl3_Task(
+    data = historical_data, covariates = covariates, outcome = outcome, 
+    id = id, drop_missing_outcome = drop_missing_outcome, folds = folds
+  )
+  
   if(fit_sl){
-    chained_task <- fit$chain(task)
+    historical_stack <- Lrnr_cv$new(historical_stack, full_fit = TRUE)
+  }
+  
+  fit <- historical_stack$train(historical_task)
+  
+  if(fit_sl){
+    chained_task <- fit$chain(historical_task)
     
     metalearner_nnls <- make_learner(Lrnr_nnls)
     nnls_fit <- metalearner_nnls$train(chained_task)
@@ -46,11 +46,9 @@ make_historical_sl <- function(historical_data, outcome, covariates, id,
     discrete_fit <- metalearner_discrete$train(chained_task)
     sl_discrete <- make_learner(Pipeline, fit, discrete_fit)
     
-    fit_return_obj <- list(cv_fit = fit, sl_discrete = sl_discrete, 
-                           sl_nnls = sl_nnls, sl_nnls_convex = sl_nnls_convex, 
-                           task=task)
+    return(list(cv_fit = fit, sl_discrete = sl_discrete, sl_nnls = sl_nnls, 
+                sl_nnls_convex = sl_nnls_convex, task = historical_task))
   } else {
-    fit_return_obj <- fit
+    return(fit)
   }
-  return(fit_return_obj)
 }
