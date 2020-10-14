@@ -41,7 +41,6 @@ dev.off()
 results_path <- paste0(args$outcome, "_id", args$individual_id, ".Rdata")
 load(file=paste0(data_path, results_path))
 
-
 process_tables <- function(results, type = c("onlineSL_table", "forecasts")){
   
   window10 <- c("onlineSL_adapt_window10", "onlineSL_historical_window10", 
@@ -157,3 +156,10 @@ pdf(file=paste0(dir, "/", "gap", args$outcome_gap, "min", "_onlineSLresults_indi
     height=8, width=10)
 make_plot(df)
 dev.off()
+
+truth <- forecast_tbl[["truth"]]
+time <- forecast_tbl[["forecast_time"]]
+not_lrnr <- c("forecast_time", "truth", "LOCF")
+lrnr_tbl <- forecast_tbl[,-not_lrnr, with=F]
+MSE_tbl <- apply(lrnr_tbl, 2, function(x) ((x-truth)^2))
+MSEs <- colSums(MSE_tbl, na.rm = T)

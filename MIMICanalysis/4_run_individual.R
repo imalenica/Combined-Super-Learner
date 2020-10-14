@@ -107,7 +107,7 @@ set.seed(518)
 
 sl3_debug_mode()
 # N <- length(splits)-1
-N <- 5
+N <- 2
 start_time <- proc.time()
 for(i in 1:N){
   
