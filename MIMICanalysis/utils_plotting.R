@@ -16,7 +16,11 @@ visualize <- function(individual_data, smoothed_data=F, smooth_type=NULL){
   if(smoothed_data){
     y_name_bp_plot <- paste0("5-Min Smoothed ", smooth_type, " Mean BP")
     y_name_vitals_plot <- paste0("5-Min Smoothed ", smooth_type, " Vitals")
-    abpmean_name <- "abpmean_lag5"
+    abpmean_name <- paste0("abpmean_lag5_", smooth_type)
+    spo2_name <- paste0("spo2_lag5_", smooth_type)
+    hr_name <- paste0("hr_lag5_", smooth_type)
+    abpsys_name <- paste0("abpsys_lag5_", smooth_type)
+    abpdias_name <- paste0("abpdias_lag5_", smooth_type)
   } else {
     y_name_bp_plot <- "Mean BP"
     y_name_vitals_plot <- "Vitals"

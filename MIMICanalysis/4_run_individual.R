@@ -1,173 +1,98 @@
-################################### read args ##################################
-# args <- R.utils::commandArgs(trailingOnly = TRUE, 
-#                              asValues = TRUE,
-#                              defaults = list(
-#                                outcome_gap = 15,
-#                                smooth = "none"
-#                                history = 30
-#                                individual_id = "791"))
+##### Savio
+# if (grepl("savio2", Sys.info()["nodename"])) {
+#   .libPaths("/global/scratch/rachelvphillips/R")
+#   Sys.setenv(R_REMOTES_NO_ERRORS_FROM_WARNINGS="true")
+# }
+# 
+# ################################## read args ##################################
+# args <- R.utils::commandArgs(
+#   trailingOnly=T, asValues=T, 
+#   defaults=list()
+# )
 
-args <- list(outcome_gap = 15, smooth = "none", history = 30,
-             individual_id = "791")
+##### locally
+args <- list(outcome="Y15_lag5_mean", ids=TBD)
 
 ############################ load libraries, data, source ######################
 library(data.table)
 library(origami)
 library(sl3)
-library(earth)
+library(here)
 
-# source(here::here("R", "setup.R"))
-# source(here::here("R", "sl_funs.R"))
-source(here::here("MIMICanalysis", "2_sl3_setup.R"))
-source(here::here("R", "v3", "make_adapt_and_online_sl.R"))
-source(here::here("R", "v3", "utils_sl.R"))
+##### Savio
+# source(here::here("R", "make_adapt_sl.R"))
+# source(here::here("R", "sl3_setup.R"))
+# source(here::here("R", "process_task.R"))
+# source(here::here("R", "get_weights.R"))
+# file_path <- "/global/scratch/rachelvphillips/symphony-data/"
+
+##### locally 
+source(here::here("R", "v3", "make_adapt_sl.R"))
+source(here::here("R", "v3", "run_adapt_sl.R"))
+source(here::here("MIMICanalysis", "sl3_setup.R"))
 source(here::here("R", "v3", "process_task.R"))
 source(here::here("R", "v3", "get_weights.R"))
-# data_path <- "/global/scratch/rachelvphillips/symphony-data/"
-data_path <- "~/Downloads/"
+file_path <- "~/Downloads/"
+
 options(sl3.verbose = FALSE)
 
-if(args$history == 30){
-  individual_data_pre <- "individual30"
-  historical_data_pre <- "historical30"
-} else if(args$history == 60){
-  individual_data_pre <- "individual60"
-  historical_data_pre <- "historical60"
+
+if(grepl("mean", args$outcome)){
+  smooth <- "mean"
+} else if(grepl("median", args$outcome)){
+  smooth <- "median"
 }
 
-if(args$smooth == "mean"){
-  outcome <- paste0("Y", ((args$outcome_gap)+5), "_lag5_mean")
-  individual_data <- paste0(individual_data_pre, "_smooth_mean.Rdata")
-  historical_data <- paste0(historical_data_pre, "_smooth_mean.Rdata")
-} else if(args$smooth == "median"){
-  outcome <- paste0("Y", ((args$outcome_gap)+5), "_lag5_median")
-  individual_data <- paste0(individual_data_pre, "_smooth_median.Rdata")
-  historical_data <- paste0(historical_data_pre, "_smooth_median.Rdata")
-} else if(args$smooth == "none"){
-  outcome <- paste0("Y", args$outcome_gap)
-  individual_data <- paste0(individual_data_pre, ".Rdata")
-  historical_data <- paste0(historical_data_pre, ".Rdata")
+get_all_outcomes <- function(outcome_gaps = c(10,15,20,25,30,35,40), smooth){
+  sapply(outcome_gaps, function(gap) paste0("Y", gap+5, "_lag5_", smooth))
 }
-############################ load & subset individual data #####################
-individual_data_path <- paste0(data_path, individual_data)
-load(individual_data_path)
+outcomes <- get_all_outcomes(smooth = smooth)
 
-# subset to subject of interest
+load(paste0(file_path, "individual_", smooth, ".Rdata"))
 individual$id <- as.character(individual$id)
-d <- individual[id == args$individual_id,]
-rm(individual)
-setorder(d, time_and_date)
+individual <- individual[id %in% args$ids,]
 
-############################## load historical fit #############################
-historical_fit_path <- paste0(data_path, outcome, "_", historical_data)
-load(historical_fit_path)
-historical_fit <- fit # rename
-rm(fit)
+covs <- get_covariates(individual)
+cv_stack <- get_cv_stack_individual()
+weights_control <- list(window = 120, delay_decay = 10, rate_decay = 0.01)
 
-############################### retain covariates ##############################
-W <- c("rank_icu", "sex", "age", "care_unit", "sapsi_first", "sofa_first", 
-       "bmi", "admission_type_descr")
-if(any(is.na(d[, W, with=FALSE]))){
-  stop("NA baseline covariates")
-}
-covs <- get_covariates(d)
-rm(get_covariates)
-
-########################### set up pseudo-online data ##########################
-max_stop_time <- 1440
-initial_burn_in <- 30
-batch <- 5
-
-max_times <- c(max_stop_time, nrow(d))
-max_time <- max_times[which.min(max_times)]
-if(max_time < 100) {
-  stop(paste0("Insufficient time for subject :", args$individual_id))
-}
-
-splits <- seq((initial_burn_in+batch), max_time, batch)
-training_data_list <- lapply(splits, function(x) data.table(d[1:x, ]))
-forecast_data_list <- lapply(splits, function(x) data.table(d[(x+1):(x+batch), ]))
-rm(d)
-
-# function to determine new cv stacks based on sample size
-get_cv_stack_group <- function(n) ifelse(n<50, 1, ifelse(n>=50 && n<200, 2, 3))
-
-# function to increase burn_in (i.e., initial training size) w complex cv stacks
-get_burn_in <- function(n) ifelse(n<200, initial_burn_in, (initial_burn_in*5))
-
-################################## run #########################################
-
-loss_tables <- list()
-onlineSL_tables <- list()
-onlineSL_forecasts <- list()
-individual_fits <- list()
-all_forecasts <- list()
-
-set.seed(518)
-
-sl3_debug_mode()
-# N <- length(splits)-1
-N <- 2
-start_time <- proc.time()
-for(i in 1:N){
+plot_decay <- function(weights_control, max_time = 240){
   
-  # quick clean of results we no longer need
-  if(i > 2){
-    loss_tables[[i-2]] <- NA
-    onlineSL_tables[[i-2]] <- NA
-    onlineSL_forecasts[[i-2]] <- NA
-    individual_fits[[i-2]] <- NA
-  }
-  
-  # initiate "online" training and forecast data
-  training_data <- data.table(training_data_list[[i]])
-  forecast_data <- data.table(forecast_data_list[[i]])
-  burn_in <- get_burn_in(splits[[i]])
-
-  if(i == 1){
-    cv_stack <- make_individual_cv_stack(n = splits[[i]])
-    fit <- invisible(make_adapt_and_online_sl(
-      individual_training_data = training_data, outcome = outcome, 
-      id = args$individual_id, covariates = covs, 
-      historical_fit = historical_fit, batch = batch, first_window = burn_in, 
-      individual_stack = cv_stack, individual_forecast_data = forecast_data, 
-      first_fit = TRUE
-    ))
+  weights <- rep(1, max_time)
+  times <- seq(from = max_time, to = 1)
+  lags <- max_time - times
+    
+  if (!is.null(weights_control$window)) {
+    window <- max_time - weights_control$window
+    weights <- weights * ifelse(times <= window, 0, 1)
   } else {
-    # don't make new stack unless we're jumping to new cv_stack group
-    previous_group <- get_cv_stack_group(splits[[i-1]])
-    current_group <- get_cv_stack_group(splits[[i]])
-    if(previous_group == current_group) {
-      cv_stack <- NULL
-    } else {
-      cv_stack <- make_individual_cv_stack(n = splits[[i]])
-    }
-    fit <- invisible(make_adapt_and_online_sl(
-      individual_training_data = training_data, outcome = outcome, 
-      id = args$individual_id, covariates = covs, batch = batch, 
-      first_window = burn_in, historical_fit = historical_fit, 
-      individual_forecast_data = forecast_data, individual_stack = cv_stack, 
-      first_fit = FALSE, individual_fit = individual_fits[[i-1]], 
-      loss_table = loss_tables[[i-1]], onlineSL_table = onlineSL_tables[[i-1]],
-      previous_onlineSL_forecasts = onlineSL_forecasts[[i-1]]
-    ))
+    weights_control$window <- "NULL"
   }
-  loss_tables[[i]] <- fit$loss_table
-  onlineSL_tables[[i]] <- fit$onlineSL_table
-  onlineSL_forecasts[[i]] <- fit$onlineSL_forecasts
-  individual_fits[[i]] <- fit$individual_fit
-  all_forecasts[[i]] <- fit$all_forecasts
+  
+  if (!is.null(weights_control$rate_decay)) {
+    lags <- max_time - times
+    if (!is.null(weights_control$delay_decay)) {
+      lags_delayed <- lags - weights_control$delay_decay
+      lags <- ifelse(lags_delayed < 0, 0, lags_delayed)
+    } else {
+      weights_control$delay_decay <- "NULL"
+    }
+    weights <- weights * (1 - weights_control$rate_decay)^lags
+  } else {
+    weights_control$rate_decay <- "NULL"
+  }
+  title <- paste0("Decay in time wrt window=", weights_control$window, 
+                  ", delay_decay=", weights_control$delay_decay,
+                  ", rate_decay=", weights_control$rate_decay)
+  plot(weights, xlab = "Distance from current observation (minutes)", 
+       ylab = "Weight applied to learner losses", main = title, type = "l")
 }
-end_time <- proc.time() - start_time
-end_time
 
-forecast_tbl <- rbindlist(all_forecasts, fill=T)
-results <- list(
-  onlineSL_table = onlineSL_tables[[N]],
-  loss_table = loss_tables[[N]],
-  forecast_table = forecast_tbl
+
+outcome_specific_results <- run_slstream_allID(
+  multi_individual_data = individual, ids = args$ids, covariates = covs, 
+  outcome = args$outcome, file_path = file_path, cv_stack = cv_stack, 
+  slstream_weights_control = weights_control, cores = NULL
 )
-
-################################## save ########################################
-path <- paste0(outcome, "_id", args$individual_id, ".Rdata")
-save(results, file=paste0(data_path, path), compress=T)
+results_path <- paste0(args$outcome, ".Rdata")
+save(outcome_specific_results, file=paste0(file_path, results_path), compress=T)

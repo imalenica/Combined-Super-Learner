@@ -8,28 +8,22 @@
 # historical_stack: stack of sl3 learners to model historical data  
 # id: column name indicating unique subject identifier for appropraite V-fold cv
 
-make_historical_sl <- function(historical_data, historical_stack, outcome, 
-                               covariates, id, drop_missing_outcome = TRUE,
+make_historical_sl <- function(historical_data, outcome, covariates, id,
+                               historical_stack, drop_missing_outcome = TRUE, 
                                fit_sl = TRUE, folds = NULL, V = 5){
  
-  historical_data <- data.table::data.table(historical_data)
+  dt <- data.table::data.table(historical_data)
   
-  if(is.null(folds)){
-    folds <- origami::make_folds(
-      n = historical_data, cluster_ids = historical_data[[id]], V = V
-    )
-  }
-  
-  historical_task <- make_sl3_Task(
-    data = historical_data, covariates = covariates, outcome = outcome, 
-    id = id, drop_missing_outcome = drop_missing_outcome, folds = folds
-  )
+  task <- sl3::make_sl3_Task(dt, covariates, outcome, id = id,
+                             drop_missing_outcome = drop_missing_outcome)
   
   if(fit_sl){
-    historical_stack <- Lrnr_cv$new(historical_stack, full_fit = TRUE)
+    if(!grepl("Lrnr_cv", class(historical_stack)[1])){ 
+      historical_stack <- Lrnr_cv$new(historical_stack, full_fit = T)
+    }
   }
   
-  fit <- historical_stack$train(historical_task)
+  fit <- historical_stack$train(historical_stack)
   
   if(fit_sl){
     chained_task <- fit$chain(historical_task)

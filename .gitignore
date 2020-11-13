@@ -11,3 +11,4 @@ Reports/Preprocessing_cache/
 Simulations/arima_sample*.Rmd
 *.rds
 .Rhistory
+*.DS_Store

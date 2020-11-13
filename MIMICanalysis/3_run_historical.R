@@ -14,7 +14,7 @@ args <- list(file = "historical60_mean.Rdata", outcome = "Y10_lag5_mean")
 library(data.table)
 library(origami)
 library(sl3)
-source(here::here("MIMICanalysis","setup.R"))
+source(here::here("MIMICanalysis","sl3_setup.R"))
 # source(here::here("R", "setup.R"))
 options(sl3.verbose = FALSE)
 
@@ -27,7 +27,6 @@ d <- historical
 
 covs <- get_covariates(d)
 rm(get_covariates)
-rm(load_and_prep_historical_data)
 rm(make_historical_stack)
 
 # task
@@ -50,6 +49,3 @@ proc.time() - t
 fit_name <- paste0(args$outcome, "_", args$file)
 fit_path <- paste0("/global/scratch/rachelvphillips/symphony-data/", fit_name)
 save(fit, file = fit_path, compress = TRUE)
-rm(fit)
-rm(fit_name)
-rm(fit_path)
