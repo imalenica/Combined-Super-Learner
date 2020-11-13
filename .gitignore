@@ -2,7 +2,7 @@ Data/*.Rdata
 Results/*.Rdata
 Data/*.RData
 Results/arima_*.RData
-.Rproj.user
+*.Rproj*
 *.log
 Simulations/*_files
 .Rhistory
@@ -10,3 +10,4 @@ Simulations/*_files
 Reports/Preprocessing_cache/
 Simulations/arima_sample*.Rmd
 *.rds
+.Rhistory
