@@ -2,7 +2,8 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
                          time = "min", cv_stack, slstream_weights_control, 
                          batch = 5, max_stop_time = 2160, initial_burn_in = 30, 
                          burn_in_multiplier_for_window_size = 10, 
-                         check_baseline_covariates = TRUE, historical_fit){
+                         check_baseline_covariates = TRUE, historical_fit,
+                         drop_missing_outcome = TRUE){
   
   ############################### preliminary checks ###########################
   individual_data <- data.table::data.table(individual_data)
@@ -21,6 +22,11 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
     }
   }
   
+  missing_outcomes <- is.na(individual_data[[outcome]])
+  if(sum(missing_outcomes) > 0){
+    print(paste0("Dropping ", sum(missing_outcomes), " missing outcomes."))
+    individual_data <- individual_data[-which(missing_outcomes), ]
+  }
   
   ########################### set up pseudo-online data ########################
   max_times <- c(max_stop_time, nrow(individual_data))
@@ -39,14 +45,13 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
   get_burn_in <- function(n) ifelse(n < n_first_rw, initial_burn_in, window_size)
   
   ################################## run #########################################
-
+  
   loss_tables <- list()
   SL_tables <- list()
   individual_fits <- list()
   forecast_tables <- list()
   
   sl3_debug_mode()
-  set.seed(518)
   N <- length(splits)-1
   for(i in 1:N){
     
@@ -102,7 +107,7 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
   return_list <- list(SL_table = rbindlist(SL_tables, fill=T), 
                       loss_table = loss_tables[[N]],
                       forecast_table = rbindlist(forecast_tables, fill=T))
-
+  
   return(return_list)
 }
 
@@ -127,13 +132,14 @@ run_slstream_catch_error <- function(individual_data, individual_id, outcome,
   return(out)
 }
 
-run_slstream_allY <- function(outcome_list, historical_fit_list, file_path,
+run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
                               individual_data = NULL, individual_id, covariates, 
                               time = "min", cv_stack, slstream_weights_control, 
                               batch = 5, max_stop_time = 2160, 
                               initial_burn_in = 30, 
                               burn_in_multiplier_for_window_size = 10, 
-                              check_baseline_covariates = TRUE, cores = NULL){
+                              check_baseline_covariates = TRUE, cores = NULL,
+                              save_output = FALSE){
   
   if(is.null(individual_data)){
     load(paste0(file_path, "individual_mean.Rdata"))
@@ -150,14 +156,15 @@ run_slstream_allY <- function(outcome_list, historical_fit_list, file_path,
   }
   
   if(is.null(cores)){
-    cores <- detectCores()-1
+    cores <- parallel::detectCores()-1
   }
   
-  registerDoParallel(cores = cores) # set up parallelization
-  getDoParWorkers() 
-  id_specific_results <- foreach(i = 1:(length(outcome_list))) %dopar% {
+  doParallel::registerDoParallel(cores = cores) # set up parallelization
+  foreach::getDoParWorkers() 
+  len <- length(outcomes)
+  id_specific_results <- foreach::foreach(i = 1:len) foreach::"%dopar%" {
     
-    outcome <- outcome_list[[i]] 
+    outcome <- outcomes[i]
     print(paste0("Starting outcome ", outcome, " for id ", individual_id))
     
     if(is.null(individual_data)){
@@ -172,7 +179,7 @@ run_slstream_allY <- function(outcome_list, historical_fit_list, file_path,
     
     run_slstream_catch_error(
       individual_data = individual_data, individual_id = individual_id, 
-      outcome = outcome_list[[i]], covariates = covariates, time = time, 
+      outcome = outcome, covariates = covariates, time = time, 
       cv_stack = cv_stack, slstream_weights_control = slstream_weights_control, 
       batch = batch, max_stop_time = max_stop_time, 
       initial_burn_in = initial_burn_in, historical_fit = historical_fit_list[[i]],
@@ -187,11 +194,14 @@ run_slstream_allY <- function(outcome_list, historical_fit_list, file_path,
   }
   names(id_specific_results) <- list_names
   
-  ################################## save ######################################
-  results_path <- paste0("id", individual_id, ".Rdata")
-  save(id_specific_results, file=paste0(file_path, results_path), compress=T)
-  msg <- paste0("id ", id, " results saved")
-  return(msg)
+  if(save_output){
+    results_path <- paste0("id", individual_id, ".Rdata")
+    save(id_specific_results, file=paste0(file_path, results_path), compress=T)
+    msg <- paste0("id ", id, " results saved")
+    return(msg)
+  } else {
+    return(id_specific_results)
+  }
 }
 
 run_slstream_allID <- function(multi_individual_data, ids, covariates, 
@@ -201,7 +211,7 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
                                initial_burn_in = 30, 
                                burn_in_multiplier_for_window_size = 10, 
                                check_baseline_covariates = TRUE,
-                               cores = NULL){
+                               cores = NULL, save_output = FALSE){
   
   if(is.null(historical_fit)){
     if(grepl("mean", outcome)){
@@ -217,12 +227,13 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
   }
   
   if(is.null(cores)){
-    cores <- detectCores()-1
+    cores <- parallel::detectCores()-1
   }
   
-  registerDoParallel(cores = cores) # set up parallelization
-  getDoParWorkers() 
-  Y_specific_results <- foreach(i = 1:(length(ids))) %dopar% {
+  doParallel::registerDoParallel(cores = cores) # set up parallelization
+  foreach::getDoParWorkers() 
+  len <- length(ids)
+  Y_specific_results <- foreach::foreach(i = 1:len) foreach::"%dopar%" {
     individual_id <- ids[i]
     
     print(paste0("Starting id ", individual_id, " for outcome ", outcome))
@@ -241,5 +252,13 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
     )
   }
   names(Y_specific_results) <- ids
-  return(Y_specific_results)
+  
+  if(save_output){
+    results_path <- paste0(outcome, ".Rdata")
+    save(Y_specific_results, file=paste0(file_path, results_path), compress=T)
+    msg <- paste0("Y ", outcome, " results saved")
+    return(msg)
+  } else {
+    return(Y_specific_results)
+  }
 }
