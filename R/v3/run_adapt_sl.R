@@ -155,14 +155,16 @@ run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
     rm(individual)
   }
   
+  # set up parallelization
   if(is.null(cores)){
     cores <- parallel::detectCores()-1
   }
   
-  doParallel::registerDoParallel(cores = cores) # set up parallelization
-  foreach::getDoParWorkers() 
   len <- length(outcomes)
-  id_specific_results <- foreach::foreach(i = 1:len) foreach::"%dopar%" {
+  `%dopar%` <- foreach::`%dopar%`
+  doParallel::registerDoParallel(cores = cores)
+  foreach::getDoParWorkers() 
+  id_specific_results <- foreach::foreach(i = 1:len) %dopar% {
     
     outcome <- outcomes[i]
     print(paste0("Starting outcome ", outcome, " for id ", individual_id))
@@ -226,14 +228,16 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
     rm(fit)
   }
   
+  # set up parallelization
   if(is.null(cores)){
     cores <- parallel::detectCores()-1
   }
   
-  doParallel::registerDoParallel(cores = cores) # set up parallelization
-  foreach::getDoParWorkers() 
   len <- length(ids)
-  Y_specific_results <- foreach::foreach(i = 1:len) foreach::"%dopar%" {
+  `%dopar%` <- foreach::`%dopar%`
+  doParallel::registerDoParallel(cores = cores)
+  foreach::getDoParWorkers() 
+  Y_specific_results <- foreach::foreach(i = 1:len) %dopar% {
     individual_id <- ids[i]
     
     print(paste0("Starting id ", individual_id, " for outcome ", outcome))
