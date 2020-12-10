@@ -112,3 +112,34 @@ sl_weights_predict <- function(sl_weights, pred){
   colnames(sl_pred) <- c("nnls_convexSL", "nnls_SL", "solnp_convexSL", "solnp_SL")
   return(sl_pred)
 }
+
+################################################################################
+# we include pred, since oSL selected an SL wrt to those preds
+retain_sl_weights <- function(online_sl_name, learner_sl_weights, pred){
+  
+  # which metalearner did the online sl select
+  if(grepl("nnls_convexSL", online_sl_name)){
+    online_sl_metalearner <- "weights_nnls_convex"
+  } else if (grepl("nnls_SL", online_sl_name)){
+    online_sl_metalearner <- "weights_nnls"
+  } else if (grepl("solnp_convexSL", online_sl_name)){
+    online_sl_metalearner <- "weights_solnp_convex"
+  } else if (grepl("solnp_SL", online_sl_name)){
+    online_sl_metalearner <- "weights_solnp"
+  }
+  
+  # ensure correspondence between weights and predictions
+  cols <- colnames(pred)[which(colnames(pred) %in% colnames(learner_sl_weights))]
+  learner_sl_weights <- learner_sl_weights[, cols]
+  pred <- pred[, cols, with=F]
+  
+  # remove NA predictions, weights
+  na_idx <- which(colSums(is.na(pred)) > 0)
+  if(length(na_idx) > 0){
+    wts_noNA <- learner_sl_weights[,-na_idx]
+  } else {
+    wts_noNA <- learner_sl_weights
+  }
+  
+  return(wts_noNA[online_sl_metalearner,])
+}
