@@ -12,3 +12,4 @@ Simulations/arima_sample*.Rmd
 *.rds
 .Rhistory
 *.DS_Store
+.Rproj.user
