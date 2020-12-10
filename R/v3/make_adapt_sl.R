@@ -1,8 +1,13 @@
 slstream <- function(training_data, outcome, covariates, id, time, fold_fun, 
                      batch, window_size = NULL, first_window = NULL, 
                      individual_stack = NULL, previous_individual_fit = NULL, 
-                     historical_fit, first_fit = FALSE, loss_table = NULL, 
-                     weights_control, forecast_data){
+                     previous_fold_fits = NULL, historical_fit, first_fit = FALSE, 
+                     loss_table = NULL, weights_control, forecast_data,
+                     print_timers = TRUE, forecast_with_full_fit = FALSE,
+                     full_fit_threshold = NULL, outcome_bounds = NULL){
+  
+  # start timer
+  start_time <- proc.time()
   
   ################################ check arguments #############################
   
@@ -50,21 +55,70 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   }
   train_task <- process_task(train_task, historical_task)
   
-  # fit stack if individual_stack is provided
-  if(!is.null(individual_stack)){
+  if(!is.null(previous_individual_fit)){
+    # update learners with new folds
+    ind_fit <- previous_individual_fit$update(train_task)
+  } else {
     # is individual_stack already a cv stack?
     if(grepl("Lrnr_cv", class(individual_stack)[1])){ 
       cv_stack <- individual_stack 
     } else {
-      cv_stack <- Lrnr_cv$new(individual_stack, full_fit = T)
+      cv_stack <- Lrnr_cv$new(individual_stack)
     }
     ind_fit <- cv_stack$train(train_task)
-  } else {
-    ind_fit <- previous_individual_fit$update(train_task) # update learners
   }
+  # timer for training learners
+  train_time <- proc.time()
+  
+  
+  if(forecast_with_full_fit){
+    # make fold for a full-ish fit trained on at most full_fit_threshold obs
+    if(is.null(full_fit_threshold) || nrow(training_data) <= full_fit_threshold){
+      full_fit_data <- data.table(training_data)
+    } else {
+      start_idx <- nrow(training_data) - full_fit_threshold + 1
+      full_fit_data <- data.table(training_data[start_idx:(nrow(training_data)), ])
+    }
+    full_fit_task <- sl3::make_sl3_Task(full_fit_data, covariates, outcome, 
+                                        time = time)
+    full_fit_task <- process_task(full_fit_task, historical_task)
+    full_fit_task <- process_task(full_fit_task, train_task)
+    
+    full_fit <- cv_stack$params$learner$train(full_fit_task)
+  } 
+  # timer for full fit
+  full_fit_time <- proc.time()
   
   ########################### get fold-specific predictions ####################
-  fold_fits <- lapply(folds, function(fold){
+  if(!is.null(previous_fold_fits) & !is.null(previous_individual_fit)){
+    # check correspondence between previous fold-specific predictions & truths
+    valid_fold_fit <- unlist(lapply(seq_len(length(folds)), function(x) {
+      if (x > length(previous_individual_fit$training_task$folds)) {
+        return(FALSE)
+      } else {
+        prev_fold <- previous_individual_fit$training_task$folds[[x]]
+        eq_train <- all.equal(prev_fold$training_set, folds[[x]]$training_set)
+        eq_valid <- all.equal(prev_fold$validation_set, folds[[x]]$validation_set)
+        train_check <- eq_train & eq_valid
+        
+        d <- train_task$data[folds[[x]]$validation_set, ]
+        eq_time <- all.equal(previous_fold_fits[[x]]$time, d[[time]])
+        eq_obs <- all.equal(previous_fold_fits[[x]]$obs, d[[outcome]])
+        pred_check <- eq_time & eq_obs
+        
+        return(train_check & pred_check)
+      }
+    }))
+    cat("\nUpdating", length(valid_fold_fit) - sum(valid_fold_fit), "fold(s)\n")
+    previous_fold_fits <- previous_fold_fits[which(valid_fold_fit)]
+    new_folds <- folds[which(!valid_fold_fit)]
+  } else {
+    previous_fold_fits <- NULL
+    new_folds <- folds
+  }
+  
+  fold_fits <- lapply(new_folds, function(fold){
+    
     # retain validation task fold v
     v_task <- validation_task(train_task, fold)
     
@@ -84,28 +138,40 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
     
     # put all fold v predictions together
     pred <- cbind(hist_pred, ind_pred)
+    if(!is.null(outcome_bounds)){
+      pred <- data.table(apply(pred, 2, truncate, outcome_bounds))
+    }
+    
     
     # get truth for fold v
     valid_data <- train_task$data[fold$validation, ]
-    truth <- valid_data[[outcome]]
+    obs <- valid_data[[outcome]]
     time <- valid_data[[time]]
     
-    return(list(pred = pred, truth = truth, time = time))
+    return(list(pred = pred, obs = obs, time = time))
   })
+  
+  # recombine with previous fold-specific list of pred & obs
+  if(length(previous_fold_fits) > 0){
+    fold_fits <- c(previous_fold_fits, fold_fits)
+  } 
+  
+  # timer for getting learner predictions
+  pred_time <- proc.time()
   
   ############## use v-1 fold-specific predictions to train SLs ################
   
   # train SLs on every fold fit except the most recent
   # SL lrnr weights are wrt to 3 lrnr sets: all, ind, & hist lrnrs
   trainSL_fold_fits <- fold_fits[-length(fold_fits)]
-  t_truth <- Reduce(c, lapply(trainSL_fold_fits, '[[', 'truth'))
+  t_obs <- Reduce(c, lapply(trainSL_fold_fits, '[[', 'obs'))
   t_pred <- rbindlist(lapply(trainSL_fold_fits, '[[', 'pred'), fill=T)
   t_pred_ind_lrnrs <- t_pred[, grep("individual_", colnames(t_pred)), with=F]
   t_pred_hist_lrnrs <- t_pred[, grep("historical_", colnames(t_pred)), with=F]
   
-  wts_SLall <- sl_weights_fit(t_pred, t_truth)
-  wts_SLind <- sl_weights_fit(t_pred_ind_lrnrs, t_truth)
-  wts_SLhist <- sl_weights_fit(t_pred_hist_lrnrs, t_truth)
+  wts_SLall <- sl_weights_fit(t_pred, t_obs)
+  wts_SLind <- sl_weights_fit(t_pred_ind_lrnrs, t_obs)
+  wts_SLhist <- sl_weights_fit(t_pred_hist_lrnrs, t_obs)
   
   ########### get ALL learner (SL and base learner) predictions ################
   # predictions correspond to validation data that was not used in training. 
@@ -117,6 +183,7 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   
   # get SL learner predictions
   v_pred_SLall <- sl_weights_predict(wts_SLall, v_pred)
+  colnames(v_pred_SLall) <- paste0("adaptSL_", colnames(v_pred_SLall))
   
   v_pred_ind_lrnrs <- v_pred[, grep("individual_", colnames(v_pred)), with=F]
   v_pred_SLind <- sl_weights_predict(wts_SLind, v_pred_ind_lrnrs)
@@ -127,14 +194,14 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   colnames(v_pred_SLhist) <- paste0("historicalSL_", colnames(v_pred_SLhist))
   
   # put SLs predictions together with individual learner predictions
-  v_pred <- cbind(v_pred_SLall, v_pred_SLind, v_pred_SLhist, v_pred)
+  v_preds <- cbind(v_pred_SLall, v_pred_SLind, v_pred_SLhist, v_pred)
   
   # retain other info that will be relevant
   v_time <- valid_fold_fit$time
-  v_truth <- valid_fold_fit$truth
+  v_obs <- valid_fold_fit$obs
   
   # calculate the loss under these honest predictions
-  v_loss <- data.table::data.table(apply(v_pred, 2, function(p) (p-v_truth)^2))
+  v_loss <- data.table::data.table(apply(v_preds, 2, function(p) (p-v_obs)^2))
   loss_tbl <- data.table::data.table(time=v_time, v_loss)
   
   # combine with previous losses 
@@ -170,19 +237,35 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   # calculate the cv_risk, ie. weighted mean loss for each learner
   losses <- loss_tbl[, -"time", with=F]
   cv_risk <- t(apply(losses, 2, function(loss) weighted.mean(loss, weights)))
-  # subset to set of individually trained lrnrs, and historically trained lrnrs
-  cv_risk_ind <- cv_risk[, grep("individual", colnames(cv_risk))]
-  cv_risk_hist <- cv_risk[, grep("historical", colnames(cv_risk))]
   
-  # select the online SL under various learner subsets
-  dSL_all <- colnames(cv_risk)[which.min(cv_risk)]
-  dSL_ind <- names(cv_risk_ind)[which.min(cv_risk_ind)]
-  dSL_hist <- names(cv_risk_hist)[which.min(cv_risk_hist)]
+  # select the online SL (a double SL) 
+  dSL <- colnames(cv_risk)[which.min(cv_risk)]
   
-  SL_tbl <- data.table::data.table(id, min(v_time), max(v_time), dSL_all, 
-                                   dSL_ind, dSL_hist)
-  colnames(SL_tbl) <- c("ID", "min_start", "min_end", "SL_adapt", 
-                        "SL_individual", "SL_historical")
+  # get weights for the online SL (incase it selected a SL) 
+  solo_lrnrs <- colnames(losses)[-grep("SL", colnames(losses))]
+  if(grepl("SL", dSL)){ # the dSL selected a SL base learner
+    if(grepl("adaptSL_", dSL)){
+      dSL_wts <- retain_sl_weights(dSL, wts_SLall, v_pred)
+    } else if(grepl("individualSL_", dSL)){
+      dSL_wts <- retain_sl_weights(dSL, wts_SLind, v_pred_ind_lrnrs)
+    } else if(grepl("historicalSL_", dSL)){
+      dSL_wts <- retain_sl_weights(dSL, wts_SLhist, v_pred_hist_lrnrs)
+    }
+    # incorporate all learners in losses table wrt to losses table order
+    dSL_wts <- dSL_wts[match(solo_lrnrs, names(dSL_wts))]
+    names(dSL_wts) <- solo_lrnrs
+    dSL_wts[is.na(dSL_wts)] <- 0 # assign weight 0 to unused learners
+  } else { # the dSL selected a non-SL base learner
+    # assign weight 0 to all learners that are not the non-SL dSL
+    dSL_wts <- rep(0, length(solo_lrnrs))
+    names(dSL_wts) <- solo_lrnrs
+    dSL_wts[which(solo_lrnrs == dSL)] <- 1
+  }
+  dSL_tbl <- data.table::data.table(id, min(v_time), max(v_time), dSL, t(dSL_wts))
+  colnames(dSL_tbl)[1:4] <- c("id", "min_start", "min_end", "onlineSL")
+  
+  # timer for all SL things: training SL learners, and double SL selection
+  SL_time <- proc.time()
   
   ################# forecast with online SL and other learners #################
   forecast_data <- data.table::data.table(forecast_data)
@@ -206,26 +289,67 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   }
   colnames(hist_forecast) <- paste0("historical_", colnames(hist_forecast))
   
-  ind_forecast <- ind_fit$predict_fold(forecast_task, "full")
+  if(forecast_with_full_fit){
+    ind_forecast <- full_fit$predict(forecast_task)
+  } else {
+    ind_forecast <- ind_fit$predict_fold(forecast_task, length(folds))
+  }
   colnames(ind_forecast) <- paste0("individual_", colnames(ind_forecast))
   
   forecast <- cbind(hist_forecast, ind_forecast)
+  if(!is.null(outcome_bounds)){
+    forecast <- data.table(apply(forecast, 2, truncate, outcome_bounds))
+  }
   
   # get SL learner forecasts
   forecast_SLall <- sl_weights_predict(wts_SLall, forecast)
+  colnames(forecast_SLall) <- paste0("adaptSL_", colnames(forecast_SLall))
   forecast_SLind <- sl_weights_predict(wts_SLind, ind_forecast)
   colnames(forecast_SLind) <- paste0("individualSL_", colnames(forecast_SLind))
   forecast_SLhist <- sl_weights_predict(wts_SLhist, hist_forecast)
   colnames(forecast_SLhist) <- paste0("historicalSL_", colnames(forecast_SLhist))
   
-  # retain the forecasts that correspond to the online SL
   forecast <- cbind(forecast, forecast_SLall, forecast_SLind, forecast_SLhist)
-  SL_adapt <- forecast[[as.character(dSL_all)]]
-  SL_individual <- forecast[[as.character(dSL_ind)]]
-  SL_historical <- forecast[[as.character(dSL_hist)]]
-  forecast <- cbind(SL_adapt, SL_individual, SL_historical, forecast)
-  forecast <- data.table::data.table(time = forecast_task$time, forecast)
   
-  return(list(loss_table = loss_tbl, SL_table = SL_tbl, 
-              forecast_table = forecast, individual_fit = ind_fit))
+  # retain the forecasts that correspond to the online SL
+  onlineSL <- forecast[[as.character(dSL)]]
+  forecast <- cbind(onlineSL, forecast)
+  
+  # timer for obtaining the forecasts
+  forecast_timer <- proc.time()
+  
+  #################################### timers ##################################
+  # add the time corresponding to the forecasts and the current time
+  forecast_time <- forecast_task$time 
+  real_time <- rep(max(train_task$time), length(forecast_time))
+  # we can be more precise with the real time, and add the fit time
+  end_time <- proc.time() - start_time
+  if(time == "min"){
+    real_time_precise <- real_time + end_time["elapsed"]/60
+    tbl <- data.table::data.table(forecast_time, real_time, real_time_precise, 
+                                  forecast)
+  } else {
+    tbl <- data.table::data.table(forecast_time, real_time, forecast)
+  }
+  
+  timers <- list(
+    run_timer = end_time, train_timer = train_time-start_time, 
+    full_fit_timer = full_fit_time-train_time, pred_timer = pred_time-full_fit_time, 
+    SL_timer = SL_time-pred_time, forecast_timer = forecast_timer-SL_time
+  )
+  
+  if(print_timers){
+    pretty <- lapply(timers, function(x) round(as.numeric(x["elapsed"]/60), 4))
+    names(pretty) <- paste0(names(pretty), "_min")
+    print(pretty)
+  }
+  
+  return(list(loss_table = loss_tbl, sl_table = dSL_tbl, forecast_table = tbl, 
+              individual_fit = ind_fit, fold_fits = fold_fits, timers = timers))
+}
+
+truncate <- function(x, bounds){
+  x[x < min(bounds)] <- min(bounds)
+  x[x > max(bounds)] <- max(bounds)
+  return(x)
 }
