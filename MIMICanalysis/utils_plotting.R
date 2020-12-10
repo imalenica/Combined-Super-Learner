@@ -11,7 +11,49 @@ library(cowplot)
 
 source(here::here("R", "v3", "utils_mimic.R"))
 
-visualize <- function(individual_data, smoothed_data=F, smooth_type=NULL){
+################################# forecast plot ################################
+make_forecast_plot <- function(forecast_dt, type = c("realtime", "overlapping"),
+                               learners = "onlineSL"){
+  
+  learner_dt <- forecast_dt[, learners, with=F]
+  if(type == "realtime"){
+    df <- cbind.data.frame(time=forecast_dt$min, truth=forecast_dt$current_outcome, 
+                           learner_dt)
+    title <- "Forecasts alongside True BP"
+  } else if(type == "overlapping"){
+    df <- cbind.data.frame(time=forecast_dt$future_outcome_time, 
+                           truth=forecast_dt$future_outcome, learner_dt)
+    title <- "Forecasts overlapping True BP"
+  }
+  df <- melt(df, id.vars = "time")
+  df$mysize <- rep(0.4, nrow(df))
+  df$mysize[df$variable=="truth"] <- 1
+  
+  ggplot(data = df, aes(x=time, y=value, size=mysize, color=variable)) + 
+    geom_line() +
+    ylim(0,120) +
+    scale_size(range = c(0.5, 1), guide="none") +
+    labs(x="Time (min)", y="Smoothed Mean BP", title=title, color="Type") +
+    scale_color_brewer(palette="Dark2") + 
+    theme(legend.position = "top")
+    theme(legend.title = element_blank())
+}
+
+############################ learner proportion chart ##########################
+make_prop_plot <- function(prop_tbl){
+  df <- melt(prop_tbl, id.vars = "time")
+  ggplot(data = df, aes(x=time, y=value, size=0.5, color=variable)) + 
+    geom_line() +
+    scale_size(range = 0.5, guide = "none") +
+    labs(x = "Time (minutes)", y = "Contribution (%)", 
+         title = "Learner Type Contributions to Online SL", color = "Type") +
+    scale_color_brewer(palette = "Dark2") +
+    scale_y_continuous(breaks = c(0,.25,.5,.75,1), labels = c(0,25,50,75,100)) + 
+    theme(legend.position = "top")
+    # theme(legend.title = element_blank())
+}
+################################# patient chart ################################
+make_patient_chart <- function(individual_data, smoothed_data=TRUE, smooth_type=NULL){
   
   if(smoothed_data){
     y_name_bp_plot <- paste0("5-Min Smoothed ", smooth_type, " Mean BP")
@@ -30,7 +72,6 @@ visualize <- function(individual_data, smoothed_data=F, smooth_type=NULL){
     spo2_name <- "spo2"
     hr_name <- "hr"
   }
-  
   
   # make summary tables
   bp_tbl_summary <- make_bp_tbl_summary(individual_data, abpmean_name)
