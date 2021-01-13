@@ -1,4 +1,4 @@
-process_data <- function(X, missingness_name = "delta", strata = NULL,
+impute_data <- function(X, missingness_name = "delta", strata = NULL,
                          threshold_impute = 0.5, missing_indicator_all = FALSE,
                          impute_factor_level = TRUE, new_level_name = "Unknown") {
 
