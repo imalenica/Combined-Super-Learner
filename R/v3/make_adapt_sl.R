@@ -1,5 +1,5 @@
 slstream <- function(training_data, outcome, covariates, id, time, fold_fun, 
-                     batch, window_size = NULL, first_window = NULL, 
+                     batch, horizon, window_size = NULL, first_window = NULL, 
                      individual_stack = NULL, previous_individual_fit = NULL, 
                      previous_fold_fits = NULL, historical_fit, first_fit = FALSE, 
                      loss_table = NULL, weights_control, forecast_data,
@@ -29,13 +29,14 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   training_data <- data.table::data.table(training_data)
   
   # make folds with training data
+  # gap = horizon-batch ensures outcomes are horizon-away from being a covariate
   if(fold_fun == "folds_rolling_origin"){
     folds <- origami::make_folds(training_data, fold_fun = folds_rolling_origin,
-                                 first_window = first_window, gap = 0, 
+                                 first_window = first_window, gap = horizon-batch, 
                                  validation_size = batch, batch = batch)
   } else if(fold_fun == "folds_rolling_window"){
     folds <- origami::make_folds(training_data, fold_fun = folds_rolling_window, 
-                                 window_size = window_size, gap = 0,
+                                 window_size = window_size, gap = horizon-batch,
                                  validation_size = batch, batch = batch)
   }
   
@@ -68,26 +69,7 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
     ind_fit <- cv_stack$train(train_task)
   }
   # timer for training learners
-  train_time <- proc.time()
-  
-  
-  if(forecast_with_full_fit){
-    # make fold for a full-ish fit trained on at most full_fit_threshold obs
-    if(is.null(full_fit_threshold) || nrow(training_data) <= full_fit_threshold){
-      full_fit_data <- data.table(training_data)
-    } else {
-      start_idx <- nrow(training_data) - full_fit_threshold + 1
-      full_fit_data <- data.table(training_data[start_idx:(nrow(training_data)), ])
-    }
-    full_fit_task <- sl3::make_sl3_Task(full_fit_data, covariates, outcome, 
-                                        time = time)
-    full_fit_task <- process_task(full_fit_task, historical_task)
-    full_fit_task <- process_task(full_fit_task, train_task)
-    
-    full_fit <- cv_stack$params$learner$train(full_fit_task)
-  } 
-  # timer for full fit
-  full_fit_time <- proc.time()
+  ind_train_time <- proc.time()
   
   ########################### get fold-specific predictions ####################
   if(!is.null(previous_fold_fits) & !is.null(previous_individual_fit)){
@@ -155,9 +137,7 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   if(length(previous_fold_fits) > 0){
     fold_fits <- c(previous_fold_fits, fold_fits)
   } 
-  
-  # timer for getting learner predictions
-  pred_time <- proc.time()
+  fit_folds_time <- proc.time()
   
   ############## use v-1 fold-specific predictions to train SLs ################
   
@@ -264,8 +244,73 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   dSL_tbl <- data.table::data.table(id, min(v_time), max(v_time), dSL, t(dSL_wts))
   colnames(dSL_tbl)[1:4] <- c("id", "min_start", "min_end", "onlineSL")
   
-  # timer for all SL things: training SL learners, and double SL selection
-  SL_time <- proc.time()
+  sl_time <- proc.time()
+  
+  ################# fit relevant learners for full_fit onlineSL ################
+  if(forecast_with_full_fit){
+    nonzero_dSL_wts <- dSL_wts[which(dSL_wts != 0)]
+    dSL_lrnrs <- names(nonzero_dSL_wts)
+    full_fits <- NULL
+    # do the full fit if individually trained learners were selected
+    if(any(grepl("individual_", dSL_lrnrs))){ 
+      ind_dSL_lrnrs <- dSL_lrnrs[grep("individual_", dSL_lrnrs)]
+      # make fold for a full-ish fit trained on at most full_fit_threshold obs
+      if(is.null(full_fit_threshold) | nrow(training_data) <= full_fit_threshold){
+        full_fit_data <- data.table(training_data)
+      } else {
+        start_idx <- nrow(training_data) - full_fit_threshold + 1
+        full_fit_data <- data.table(training_data[start_idx:(nrow(training_data)), ])
+      }
+      full_fit_task <- sl3::make_sl3_Task(full_fit_data, covariates, outcome, 
+                                          time = time)
+      full_fit_task <- process_task(full_fit_task, historical_task)
+      
+      # check if there's a pipeline embedded in the list of learners
+      cv_stack_learners <- ind_fit$params$learner$params$learners
+      lrnr_classes <- sapply(cv_stack_learners, function(x) class(x)[1])
+      pipe <- names(lrnr_classes)[grep("Pipeline", lrnr_classes)]
+      if(length(pipe) > 0){
+        if(any(grepl(pipe, ind_dSL_lrnrs))){
+          # train all learners in the pipeline (couldn't figure out a workaround)
+          nonpipe_ind_dSL_lrnrs <- ind_dSL_lrnrs[-grep(pipe, ind_dSL_lrnrs)]
+          pipe_full_fit <- cv_stack_learners[[pipe]]$train(full_fit_task)
+        } else {
+          nonpipe_ind_dSL_lrnrs <- ind_dSL_lrnrs
+          pipe_full_fit <- NULL
+        }
+      } else {
+        nonpipe_ind_dSL_lrnrs <- ind_dSL_lrnrs
+        pipe_full_fit <- NULL
+      }
+      
+      # train non-pipeline learners selected by the online SL
+      if(length(nonpipe_ind_dSL_lrnrs) > 0){
+        cat(nonpipe_ind_dSL_lrnrs)
+        lrnr_full_fits <- lapply(nonpipe_ind_dSL_lrnrs, function(lrnr){
+          # subset to learner as it was named in Stack, and train it
+          lrnr <- gsub("individual_", "", lrnr)
+          full_fit <- cv_stack_learners[[lrnr]]$train(full_fit_task)
+          return(full_fit)
+        })
+        names(lrnr_full_fits) <- nonpipe_ind_dSL_lrnrs
+      } else {
+        lrnr_full_fits <- NULL
+      }
+      
+      # augment full_fits list w the relevant learner full fits 
+      stopifnot(!is.null(lrnr_full_fits) | !is.null(pipe_full_fit))
+      if(!is.null(pipe_full_fit) & !is.null(lrnr_full_fits)){
+        full_fits <- c(pipeline = list(pipe_full_fit), lrnr_full_fits)
+        names(full_fits)[1] <- pipe
+      } else if (is.null(pipe_full_fit) & !is.null(lrnr_full_fits)){
+        full_fits <- lrnr_full_fits
+      } else if (!is.null(pipe_full_fit) & is.null(lrnr_full_fits)){
+        full_fits <- list(pipe_full_fit)
+        names(full_fits)[1] <- pipe
+      }
+    } 
+  }
+  full_fit_time <- proc.time()
   
   ################# forecast with online SL and other learners #################
   forecast_data <- data.table::data.table(forecast_data)
@@ -289,11 +334,7 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   }
   colnames(hist_forecast) <- paste0("historical_", colnames(hist_forecast))
   
-  if(forecast_with_full_fit){
-    ind_forecast <- full_fit$predict(forecast_task)
-  } else {
-    ind_forecast <- ind_fit$predict_fold(forecast_task, length(folds))
-  }
+  ind_forecast <- ind_fit$predict_fold(forecast_task, length(folds))
   colnames(ind_forecast) <- paste0("individual_", colnames(ind_forecast))
   
   forecast <- cbind(hist_forecast, ind_forecast)
@@ -315,27 +356,54 @@ slstream <- function(training_data, outcome, covariates, id, time, fold_fun,
   onlineSL <- forecast[[as.character(dSL)]]
   forecast <- cbind(onlineSL, forecast)
   
-  # timer for obtaining the forecasts
+  # retain the forecasts that correspond to the full_fit online SL
+  if(forecast_with_full_fit){
+    if(!is.null(full_fits)){
+      ff_forecast_list <- lapply(full_fits, function(fit) fit$predict(forecast_task))
+      ff_forecast <- do.call(cbind, lapply(seq_along(ff_forecast_list), function(i){
+        forecast <- ff_forecast_list[[i]]
+        if(names(ff_forecast_list)[i] == pipe){
+          colnames(forecast) <- paste0("individual_", pipe, "_", colnames(forecast))
+          forecast
+        } else {
+          forecast <- data.table(forecast)
+          colnames(forecast) <- names(ff_forecast_list)[i]
+          forecast
+        }
+      }))
+      to_rm <- which(colnames(ind_forecast) %in% colnames(ff_forecast))
+      ind_forecast_reduced <- ind_forecast[, -to_rm, with=F]
+      dSL_forecast_tbl <- data.table(hist_forecast, ind_forecast_reduced, ff_forecast)
+    } else {
+      dSL_forecast_tbl <- data.table(hist_forecast, ind_forecast)
+    }
+    if(!is.null(outcome_bounds)){
+      dSL_forecast_tbl <- data.table(apply(dSL_forecast_tbl, 2, truncate, outcome_bounds))
+    }
+    onlineSL_full_fit <- osl_weights_predict(dSL_wts, dSL_forecast_tbl)
+    forecast <- cbind(onlineSL_full_fit, forecast)
+  }
   forecast_timer <- proc.time()
-  
   #################################### timers ##################################
   # add the time corresponding to the forecasts and the current time
-  forecast_time <- forecast_task$time 
-  real_time <- rep(max(train_task$time), length(forecast_time))
+  forecast_time <- rep(max(forecast_task$time), length(forecast_task$time))
   # we can be more precise with the real time, and add the fit time
   end_time <- proc.time() - start_time
   if(time == "min"){
-    real_time_precise <- real_time + end_time["elapsed"]/60
-    tbl <- data.table::data.table(forecast_time, real_time, real_time_precise, 
-                                  forecast)
+    forecast_time_precise <- forecast_time + end_time["elapsed"]/60
+    tbl <- data.table::data.table(time = forecast_task$time, forecast_time, 
+                                  forecast_time_precise, forecast)
   } else {
-    tbl <- data.table::data.table(forecast_time, real_time, forecast)
+    tbl <- data.table::data.table(time = forecast_task$time, forecast_time, forecast)
   }
   
   timers <- list(
-    run_timer = end_time, train_timer = train_time-start_time, 
-    full_fit_timer = full_fit_time-train_time, pred_timer = pred_time-full_fit_time, 
-    SL_timer = SL_time-pred_time, forecast_timer = forecast_timer-SL_time
+    run_timer = end_time, 
+    ind_train_timer = ind_train_time-start_time, 
+    fit_folds_timer = fit_folds_time-ind_train_time, 
+    SL_timer = sl_time-fit_folds_time, 
+    full_fit_timer = full_fit_time-sl_time, 
+    forecast_timer = forecast_timer-full_fit_time 
   )
   
   if(print_timers){
@@ -353,3 +421,4 @@ truncate <- function(x, bounds){
   x[x > max(bounds)] <- max(bounds)
   return(x)
 }
+
