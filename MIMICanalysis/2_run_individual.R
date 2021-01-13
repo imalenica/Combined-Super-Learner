@@ -24,7 +24,7 @@ source(here::here("R", "v3", "run_adapt_sl.R"))
 source(here::here("MIMICanalysis", "sl3_setup.R"))
 source(here::here("R", "v3", "process_task.R"))
 source(here::here("R", "v3", "get_weights.R"))
-file_path <- "~/Downloads/"
+file_path <- "~/Box/symphony-data/"
 
 library(data.table)
 library(origami)
