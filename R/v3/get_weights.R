@@ -143,3 +143,26 @@ retain_sl_weights <- function(online_sl_name, learner_sl_weights, pred){
   
   return(wts_noNA[online_sl_metalearner,])
 }
+
+################################################################################
+osl_weights_predict <- function(osl_weights, pred){
+  
+  # ensure correspondence between weights and predictions
+  cols <- colnames(pred)[which(colnames(pred) %in% names(osl_weights))]
+  osl_weights <- osl_weights[cols]
+  pred <- pred[, cols, with=F]
+  
+  # remove NA predictions, weights
+  na_idx <- which(colSums(is.na(pred)) > 0)
+  if(length(na_idx) > 0){
+    pred_noNA <- pred[,-na_idx,with=F]
+    wts_noNA <- osl_weights[,-na_idx]
+  } else {
+    pred_noNA <- pred
+    wts_noNA <- osl_weights
+  }
+  
+  # use non-NA osl weights for prediction with osl
+  osl_pred <- as.numeric(as.matrix(pred_noNA) %*% wts_noNA)
+  return(osl_pred)
+}
