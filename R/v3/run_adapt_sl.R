@@ -1,10 +1,11 @@
 run_slstream <- function(individual_data, individual_id, outcome, covariates, 
                          time = "min", cv_stack, slstream_weights_control, 
-                         batch = 5, max_stop_time = 4320, initial_burn_in = 30, 
+                         batch = 5, max_stop_time = 1440, initial_burn_in = 30, 
                          burn_in_multiplier_for_window_size = 10, historical_fit,
                          drop_missing_outcome = TRUE, print_timers = TRUE,
                          forecast_with_full_fit = FALSE, 
-                         full_fit_threshold = 305, outcome_bounds = c(10,160)){
+                         full_fit_threshold = NULL, outcome_bounds = c(10,160), 
+                         horizon){
   
   require(data.table)
   
@@ -29,15 +30,29 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
     stop(paste0("Insufficient time for subject :", individual_id))
   }
   
-  splits <- seq((initial_burn_in + 2 * batch), max_time, batch)
+  gap <- horizon-batch
+
+  splits <- seq((initial_burn_in + 2*batch + gap), max_time, batch)
   train_data_list <- lapply(splits, function(x) individual_data[1:x, ])
-  pred_data_list <- lapply(splits, function(x) individual_data[(x+1):(x+batch), ])
+  pred_data_list <- lapply(splits, function(x) individual_data[(x+gap+1):(x+batch+gap), ])
+  
+  not_na <- unlist(lapply(pred_data_list, function(x) !any(is.na(x[[outcome]]))))
+  pred_data_list <- pred_data_list[not_na]
+  train_data_list <- train_data_list[not_na]
+  stopifnot(length(pred_data_list) == length(train_data_list))
+  N <- length(pred_data_list)
   
   # function to increase burn_in, & switch to rolling window (rw) folds
   window_size <- initial_burn_in * burn_in_multiplier_for_window_size
-  n_first_rolling_window_cv <- 2 * batch + window_size # no. obs for 1st rw fit
+  n_first_rolling_window_cv <- 2 * batch + window_size + gap # no. obs for 1st rw fit
   get_burn_in <- function(n){
     ifelse(n < n_first_rolling_window_cv, initial_burn_in, window_size)
+  }
+  
+  if(forecast_with_full_fit){
+    if(is.null(full_fit_threshold)){
+      full_fit_threshold <- batch + n_first_rolling_window_cv
+    }
   }
   
   ################################## run #########################################
@@ -47,15 +62,10 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
   forecast_tables <- list()
   sl_tables <- list()
   fold_fits <- list()
-  
-  N <- length(splits)
-  if(nrow(individual_data) < max_stop_time){
-    N <- N - 1 # prevent NA in last set of forecast data
-  }
-  
+  screener_selected_covs <- list()
   for(i in 1:N){
     
-    cat("\n_____ starting run", i, "of", N, "_____\n")
+    cat("\n_____ starting run", i, "of", N, "for id", individual_id, "_____\n")
     
     # quick clean of results we no longer need
     if(i > 2){
@@ -79,7 +89,7 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
                       weights_control = slstream_weights_control,
                       forecast_with_full_fit = forecast_with_full_fit,
                       full_fit_threshold = full_fit_threshold, 
-                      outcome_bounds = outcome_bounds)
+                      outcome_bounds = outcome_bounds, horizon = horizon)
     } else {
       if(burn_in == initial_burn_in) { 
         # continue with rolling origin cross-validation & update fits
@@ -94,7 +104,7 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
                         previous_individual_fit = individual_fits[[i-1]],
                         forecast_with_full_fit = forecast_with_full_fit,
                         full_fit_threshold = full_fit_threshold, 
-                        outcome_bounds = outcome_bounds)
+                        outcome_bounds = outcome_bounds, horizon = horizon)
       } else {
         # switch to rolling window cross-validation
         if(nrow(training_data) <= n_first_rolling_window_cv){
@@ -108,7 +118,7 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
                           weights_control = slstream_weights_control,
                           forecast_with_full_fit = forecast_with_full_fit,
                           full_fit_threshold = full_fit_threshold,
-                          outcome_bounds = outcome_bounds)
+                          outcome_bounds = outcome_bounds, horizon = horizon)
         } else {
           # now we can update the rolling window fits by providing NULL stack
           fit <- slstream(training_data = training_data, outcome = outcome, 
@@ -122,7 +132,7 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
                           previous_individual_fit = individual_fits[[i-1]],
                           forecast_with_full_fit = forecast_with_full_fit,
                           full_fit_threshold = full_fit_threshold,
-                          outcome_bounds = outcome_bounds)
+                          outcome_bounds = outcome_bounds, horizon = horizon)
         }
       }
     }
@@ -131,6 +141,9 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
     forecast_tables[[i]] <- fit$forecast_table
     individual_fits[[i]] <- fit$individual_fit
     fold_fits[[i]] <- fit$fold_fits
+    oSL_fit <- fit$individual_fit$fit_object$fold_fits[[length(fit$individual_fit$fit_object$folds)]]
+    screener_fit <- oSL_fit$fit_object$learner_fits$lasso_screen$fit_object$learner_fits$Lrnr_screener_coefs_0_NULL
+    screener_selected_covs[[i]] <- screener_fit$fit_object$selected
   }
   
   ############################## assess performance ############################
@@ -145,28 +158,13 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
   SLtbl <- data.table(prop_individual = p_ind, prop_historical = p_hist, SLtbl)
   
   ##### make table of true horizon-ahead outcomes & forecasts
-  forecast_time <- individual_data[[time]] # time in which forecast was made 
-  if(grepl("15", outcome)){
-    horizon <- 15
-  } else if(grepl("20", outcome)){
-    horizon <- 20
-  } else if(grepl("25", outcome)){
-    horizon <- 25
-  } else if(grepl("30", outcome)){
-    horizon <- 30
-  } else if(grepl("35", outcome)){
-    horizon <- 35
-  } else if(grepl("40", outcome)){
-    horizon <- 40
-  } else if(grepl("45", outcome)){
-    horizon <- 45
-  }
+  time <- individual_data[[time]] # time in which forecast was made 
   obs <- individual_data[[outcome]] # the true horizon-ahead outcome
-  outcome_time <- forecast_time + horizon # time of horizon-ahead outcome
-  obs_tbl <- data.table(obs, forecast_time, outcome_time)
+  outcome_time <- time + horizon # time of horizon-ahead outcome
+  obs_tbl <- data.table(obs, time, outcome_time)
   # merge with forecasts
   forecast_tbl <- rbindlist(forecast_tables, fill = T)
-  tbl <- merge(obs_tbl, forecast_tbl, by = "forecast_time", all.x = F, all.y = T)
+  tbl <- merge(obs_tbl, forecast_tbl, by = "time", all.x = F, all.y = T)
   
   ##### for each learner, calculate time-specific & summarized MSE
   time_cols <- colnames(forecast_tbl)[grep("time", colnames(forecast_tbl))]
@@ -174,24 +172,17 @@ run_slstream <- function(individual_data, individual_id, outcome, covariates,
   MSE_tbl <- data.table(apply(preds_tbl, 2, function(pred) (pred-tbl[["obs"]])^2))
   MSEsummary <- c(id = individual_id, outcome = outcome, colMeans(MSE_tbl, na.rm=T))
   
-  ##### for each learner, calculate time-specific & summarized R-squared
-  Rsq_tbl <- data.table(apply(MSE_tbl, 2, function(res){
-    1 -  res / MSE_tbl[["individual_mean"]]
-  }))
-  Rsqsummary <- c(id = individual_id, outcome = outcome, 1-colMeans(Rsq_tbl, na.rm=T))
-  
   ##### for each learner, calculate the number of non-NA
   NAsummary <- apply(MSE_tbl, 2, function(res) sum(is.na(res)))
   
   # re-add time cols to MSE_tbl
   time_tbl <- forecast_tbl[, time_cols, with = F]
   MSE_tbl <- data.table(time_tbl, MSE_tbl)
-  Rsq_tbl <- data.table(time_tbl, Rsq_tbl)
   
   return(list(sl_table = SLtbl, loss_table = loss_tables[[N]], 
               forecast_table = forecast_tbl, NA_summary = NAsummary,
               MSE_table = MSE_tbl, MSE_summary = MSEsummary, 
-              Rsquared_table = Rsq_tbl, Rsquared_summary = Rsqsummary))
+              screener_selected_covs = screener_selected_covs))
 }
 
 run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
@@ -203,8 +194,8 @@ run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
                               save_output = TRUE, parallel = TRUE,
                               drop_missing_outcome = TRUE, 
                               forecast_with_full_fit = FALSE,
-                              full_fit_threshold = 305,  
-                              outcome_bounds = c(10,160)){
+                              full_fit_threshold = 315,  
+                              outcome_bounds = c(10,160), horizon){
   
   if(is.null(individual_data)){
     load(paste0(file_path, "individual_mean.Rdata"))
@@ -252,13 +243,11 @@ run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
         burn_in_multiplier_for_window_size = burn_in_multiplier_for_window_size, 
         drop_missing_outcome = drop_missing_outcome, print_timers = print_timers,
         forecast_with_full_fit = forecast_with_full_fit,
-        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds
+        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds,
+        horizon = horizon
       )
       if(save_output){
         results_path <- paste0(outcome, "_id", individual_id, ".Rdata")
-        if(forecast_with_full_fit){
-          results_path <- paste0("fullfit_", results_path)
-        }
         save(result, file=paste0(file_path, results_path), compress=T)
         result <- paste0(outcome, " id ", individual_id, " results saved")
       }
@@ -290,13 +279,11 @@ run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
         burn_in_multiplier_for_window_size = burn_in_multiplier_for_window_size, 
         drop_missing_outcome = drop_missing_outcome, print_timers = print_timers,
         forecast_with_full_fit = forecast_with_full_fit,
-        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds
+        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds,
+        horizon = horizon
       )
       if(save_output){
         results_path <- paste0(outcome, "_id", individual_id, ".Rdata")
-        if(forecast_with_full_fit){
-          results_path <- paste0("fullfit_", results_path)
-        }
         save(result, file=paste0(file_path, results_path), compress=T)
         msg <- paste0(outcome, " id ", individual_id, " results saved")
         results[[i]] <- msg
@@ -318,14 +305,14 @@ run_slstream_allY <- function(outcomes, historical_fit_list, file_path,
 run_slstream_allID <- function(multi_individual_data, ids, covariates, 
                                outcome, historical_fit = NULL, file_path, 
                                time = "min", cv_stack, slstream_weights_control, 
-                               batch = 5, max_stop_time = 4320, 
+                               batch = 5, max_stop_time = 1440, 
                                initial_burn_in = 30, print_timers = TRUE,
                                burn_in_multiplier_for_window_size = 10, 
                                save_output = TRUE, parallel = TRUE,
                                drop_missing_outcome = TRUE, 
                                forecast_with_full_fit = FALSE,
-                               full_fit_threshold = 305,  
-                               outcome_bounds = c(10,160)){
+                               full_fit_threshold = 315,  
+                               outcome_bounds = c(10,160), horizon){
   
   if(is.null(historical_fit)){
     if(grepl("mean", outcome)){
@@ -364,13 +351,11 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
         burn_in_multiplier_for_window_size = burn_in_multiplier_for_window_size, 
         drop_missing_outcome = drop_missing_outcome, print_timers = print_timers,
         forecast_with_full_fit = forecast_with_full_fit,
-        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds
+        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds,
+        horizon = horizon
       )
       if(save_output){
         results_path <- paste0(outcome, "_id", ids[i], ".Rdata")
-        if(forecast_with_full_fit){
-          results_path <- paste0("fullfit_", results_path)
-        }
         save(result, file=paste0(file_path, results_path), compress=T)
         result <- paste0(outcome, " id ", ids[i], " results saved")
       } 
@@ -394,13 +379,11 @@ run_slstream_allID <- function(multi_individual_data, ids, covariates,
         burn_in_multiplier_for_window_size = burn_in_multiplier_for_window_size, 
         drop_missing_outcome = drop_missing_outcome, print_timers = print_timers,
         forecast_with_full_fit = forecast_with_full_fit,
-        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds
+        full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds,
+        horizon = horizon
       )
       if(save_output){
         results_path <- paste0(outcome, "_id", ids[i], ".Rdata")
-        if(forecast_with_full_fit){
-          results_path <- paste0("fullfit_", results_path)
-        }
         save(result, file=paste0(file_path, results_path), compress=T)
         result <- paste0(outcome, " id ", ids[i], " results saved")
       } 
@@ -418,7 +401,7 @@ run_slstream_catch_error <- function(individual_data, individual_id, outcome,
                                      burn_in_multiplier_for_window_size, 
                                      print_timers, historical_fit, 
                                      drop_missing_outcome, forecast_with_full_fit,
-                                     full_fit_threshold, outcome_bounds){
+                                     full_fit_threshold, outcome_bounds, horizon){
   out <- tryCatch(
     run_slstream(
       individual_data = individual_data, individual_id = individual_id, 
@@ -429,7 +412,8 @@ run_slstream_catch_error <- function(individual_data, individual_id, outcome,
       burn_in_multiplier_for_window_size = burn_in_multiplier_for_window_size, 
       drop_missing_outcome = drop_missing_outcome, print_timers = print_timers,
       forecast_with_full_fit = forecast_with_full_fit,
-      full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds
+      full_fit_threshold = full_fit_threshold, outcome_bounds = outcome_bounds,
+      horizon = horizon
     ), error = function(e) NULL
   )
   return(out)
