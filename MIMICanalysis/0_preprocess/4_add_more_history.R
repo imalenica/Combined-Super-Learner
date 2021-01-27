@@ -281,25 +281,35 @@ save(historical, file=here(save_path, "historical_median_full.Rdata"), compress=
 load(here(save_path, "historical_mean_full.Rdata"))
 historical <- slice_rows(historical)
 historical <- process_cols(historical)
-historical <- impute_data(historical, strata=c("admission_type_descr","sex"))
+outcomes <- colnames(historical)[grepl("Y", colnames(historical))]
+predictors <- historical[, -outcomes, with=F]
+predictors_imputed <- impute_data(predictors, strata=c("admission_type_descr","sex"))
+historical <- data.table(predictors_imputed, historical[, outcomes, with=F])
+historical <- historical[, -"rank_icu", with=F]
 save(historical, file=here(save_path, "historical_mean.Rdata"), compress=T)
 rm(historical)
 
 load(here(save_path, "individual_mean_full.Rdata"))
 individual <- slice_rows(individual)
 individual <- process_cols(individual)
+individual <- individual[, -"rank_icu", with=F]
 save(individual, file=here(save_path, "individual_mean.Rdata"), compress=T)
 rm(individual)
 
 load(here(save_path, "historical_median_full.Rdata"))
 historical <- slice_rows(historical)
 historical <- process_cols(historical)
-historical <- impute_data(historical, strata=c("admission_type_descr","sex"))
+outcomes <- colnames(historical)[grepl("Y", colnames(historical))]
+predictors <- historical[, -outcomes, with=F]
+predictors_imputed <- impute_data(predictors, strata=c("admission_type_descr","sex"))
+historical <- data.table(predictors_imputed, historical[, outcomes, with=F])
+historical <- historical[, -"rank_icu", with=F]
 save(historical, file=here(save_path, "historical_median.Rdata"), compress=T)
 rm(historical)
 
 load(here(save_path, "individual_median_full.Rdata"))
 individual <- slice_rows(individual)
 individual <- process_cols(individual)
+individual <- individual[, -"rank_icu", with=F]
 save(individual, file=here(save_path, "individual_median.Rdata"), compress=T)
 rm(individual)
