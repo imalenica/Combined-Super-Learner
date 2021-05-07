@@ -1,6 +1,13 @@
 ######################## video one forecast alongside truth ####################
-make_plots <- function(movie_tbl, times, xmin, xmax){
- for (i in 1:length(times)) {
+make_plots <- function(movie_tbl, times, xmin, xmax, outcome_type){
+  if(outcome_type == "continuous"){
+    ylims <- range(c(0, 120))
+    ylabs <- "MAP"
+  } else if (outcome_type == "binomial"){
+    ylims <- range(c(0, 1))
+    ylabs <- "AHE"
+  }
+  for (i in 1:length(times)) {
     current_time <- times[i]
     truth <- movie_tbl[time <= current_time, c("truth", "time")]
 
@@ -14,38 +21,53 @@ make_plots <- function(movie_tbl, times, xmin, xmax){
       tbl <- suppressMessages(full_join(truth, forecast))
       par(mgp=c(2.5,.8,0),mar=c(5,4,4,2)+0.1)
       plot(tbl$time, tbl$truth, type = "l", lwd=2, cex.lab=2, cex.axis=1.5,
-           xlab="Time (minutes)", ylab="MAP", xlim=c(xmin, xmax),
-           ylim = range(c(0, 120)), panel.first=grid(lty=1))
+           xlab="Time (minutes)", ylab=ylabs, xlim=c(xmin, xmax),
+           ylim = ylims, panel.first=grid(lty=1))
       lines(tbl$time, tbl$forecast, type = "l", lwd=2, col = "red")
       Hmisc::minor.tick()
     } else {
       par(mgp=c(2.5,.8,0),mar=c(5,4,4,2)+0.1)
       plot(truth$time, truth$truth, type = "l", lwd=2, cex.lab=2, cex.axis=1.5,
-           xlab="Time (minutes)", ylab="MAP", xlim=c(xmin, xmax),
-           ylim = range(c(0, 120)), panel.first=grid(lty=1))
+           xlab="Time (minutes)", ylab=ylabs, xlim=c(xmin, xmax),
+           ylim = ylims, panel.first=grid(lty=1))
       Hmisc::minor.tick()
     }
   }
 }
 
-make_forecast_movie <- function(movie_tbl, name){
+make_forecast_movie <- function(movie_tbl, name, outcome_type){
   xmin <- min(movie_tbl$time, na.rm = T)
   xmax <- max(movie_tbl[!is.na(movie_tbl$truth),"time"])
   times <- seq(xmin, xmax, by=2)
-  animation::saveVideo(make_plots(movie_tbl, times, xmin, xmax),
-                         nmax=length(times), video.name=name, ani.width=2000,
-                         ani.height=1200, interval=0.3, verbose=F, autoplay=F)
+  animation::saveVideo(
+    make_plots(movie_tbl, times, xmin, xmax, outcome_type = outcome_type),
+    nmax=length(times), video.name=name, ani.width=2000, ani.height=1200,
+    interval=0.3, verbose=F, autoplay=F
+  )
 }
 
 ##################### video multiple forecasts alongside truth #################
 make_multiforecast_plots <- function(movie_tbl, cols_list,
                                      truth_line_size = 0.05,
                                      forecast_line_size = 0.1, xmin, xmax,
-                                     times){
+                                     times, outcome_type){
 
-  all <- c(movie_tbl$truth, unlist(lapply(cols_list, function(x) movie_tbl[, x$forecast])))
-  ymin <- round(min(all, na.rm = T) - 10, -1)
-  ymax <- round(max(all, na.rm = T) + 10, -1)
+  all <- c(
+    movie_tbl$truth,
+    unlist(lapply(cols_list, function(x){
+      col_idx <- which(colnames(movie_tbl) == x$forecast)
+      movie_tbl[, col_idx]
+    }))
+  )
+  if(outcome_type == "continuous"){
+    ymin <- round(min(all, na.rm = T) - 10, -1)
+    ymax <- round(max(all, na.rm = T) + 10, -1)
+    ylabs <- "MAP"
+  } else if (outcome_type == "binomial"){
+    ymin <- 0
+    ymax <- 1
+    ylabs <- "AHE"
+  }
 
   plots <- list()
   for (i in 1:length(times)) {
@@ -80,7 +102,7 @@ make_multiforecast_plots <- function(movie_tbl, cols_list,
         xlim(xmin, xmax) +
         ylim(ymin, ymax) +
         scale_size(range = c(forecast_line_size, truth_line_size), guide="none") +
-        labs(x="Time (minutes)", y="MAP", title="", color="Type") +
+        labs(x="Time (minutes)", y=ylabs, title="", color="Type") +
         scale_color_manual(values="#666666")
         theme(legend.title = element_blank())
     } else {
@@ -89,7 +111,7 @@ make_multiforecast_plots <- function(movie_tbl, cols_list,
         xlim(xmin, xmax) +
         ylim(ymin, ymax) +
         scale_size(range = c(forecast_line_size, truth_line_size), guide="none") +
-        labs(x="Time (minutes)", y="MAP", title="", color="Type") +
+        labs(x="Time (minutes)", y=ylabs, title="", color="Type") +
         scale_color_manual(values=c("#666666", "#A6761D", "#E6AB02", "#66A61E",
                                     "#E7298A", "#7570B3", "#D95F02", "#1B9E77")) +
         theme(legend.title = element_blank())
@@ -101,7 +123,8 @@ make_multiforecast_plots <- function(movie_tbl, cols_list,
 
 make_multiforecast_movie_mp4 <- function(movie_tbl, name, cols_list,
                                          truth_line_size = 0.5,
-                                         forecast_line_size = 0.3){
+                                         forecast_line_size = 0.3,
+                                         outcome_type){
   xmin <- min(movie_tbl$time, na.rm = T)
   xmax <- max(movie_tbl[!is.na(movie_tbl$truth),"time"])
   times <- seq(xmin, xmax, by = 2)
@@ -109,7 +132,8 @@ make_multiforecast_movie_mp4 <- function(movie_tbl, name, cols_list,
     plots <- make_multiforecast_plots(movie_tbl, cols_list,
                                       truth_line_size = truth_line_size,
                                       forecast_line_size = forecast_line_size,
-                                      xmin, xmax, times
+                                      xmin, xmax, times,
+                                      outcome_type = outcome_type
                                       )
     png(ani.options("img.fmt"), width = 6, height = 4, units = "in", res = 700)
     for(i in 1:length(plots)){

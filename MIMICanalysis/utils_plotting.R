@@ -1,36 +1,38 @@
-library(here)
-library(tidyverse)
-library(data.table)
-library(ggplot2)
-library(reshape2)
-library(scales)
-library(grid)
-library(gridExtra)
-library(ggpubr)
-library(cowplot)
-
-source(here::here("R", "v3", "utils_mimic.R"))
-
 ################################# forecast plot ################################
 make_forecast_plot <- function(forecast_dt, learners = "onlineSL",
                                forecast_line_size = 0.4, truth_line_size=1,
-                               title = "Online SL Forecasts Overlapping True MAP"){
+                               outcome_type){
+  cols <- c("#666666", "#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#E6AB02",
+            "#1F78B4", "#A6761D")
 
   learner_dt <- forecast_dt[, learners, with=F]
-  df <- cbind.data.frame(time=forecast_dt$future_outcome_time,
-                         truth=forecast_dt$future_outcome, learner_dt)
+  df <- cbind.data.frame(time=forecast_dt$futureY_time,
+                         truth=forecast_dt$futureY, learner_dt)
 
   df <- melt(df, id.vars = "time")
   df$mysize <- rep(forecast_line_size, nrow(df))
-  df$mysize[df$variable=="truth"] <- truth_line_size
+  df$mysize[df$variable == "truth"] <- truth_line_size
 
-  plot <- ggplot(data = df, aes(x=time, y=value, size=mysize, color=variable)) +
-    geom_line() +
-    ylim(0,120) +
-    scale_size(range = c(forecast_line_size, truth_line_size), guide="none") +
-    labs(x="Time (minutes)", y="Smoothed Mean BP", title=title, color="Type") +
-    scale_color_brewer(palette="Dark2", direction = -1) +
-    theme(legend.title = element_blank())
+  if(outcome_type == "continuous"){
+    plot <- ggplot(data = df, aes(x=time, y=value, size=mysize, color=variable)) +
+      geom_line() +
+      ylim(0,120) +
+      scale_size(range = c(forecast_line_size, truth_line_size), guide="none") +
+      labs(x="Time (minutes)", y="MAP",
+           title="Online SL Forecasts Overlapping True MAP", color="Type") +
+      scale_color_manual(values = cols) +
+      theme(legend.title = element_blank())
+  } else if(outcome_type == "binomial"){
+    plot <- ggplot(data = df, aes(x=time, y=value, size=mysize, color=variable)) +
+      geom_line() +
+      ylim(0,1) +
+      scale_size(range = c(forecast_line_size, truth_line_size), guide="none") +
+      labs(x="Time (minutes)", y="AHE",
+           title="Online SL Forecasts Overlapping True AHE", color="Type") +
+      scale_color_manual(values = cols) +
+      theme(legend.title = element_blank())
+  }
+
   return(plot)
 }
 
@@ -82,7 +84,7 @@ make_patient_chart <- function(individual_data, smoothed_data=TRUE, smooth_type=
   plots <- ggarrange(col1, col2, nrow = 1, ncol = 2, widths=c(1.5,1))
 
   # make table of W for bottom of plots
-  base <- c("id", "rank_icu", "sex", "age", "sapsi_first", "sofa_first",
+  base <- c("id", "sex", "age", "sapsi_first", "sofa_first",
             "bmi", "care_unit", "admission_type_descr", "subject_id")
   tblW <- unique(individual_data[, base, with = FALSE])
   tbl <- cbind(tblW, missing)
