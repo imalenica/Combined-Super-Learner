@@ -17,14 +17,22 @@ get_weights <- function(pred, observed, loss=NULL, convex=F, discrete=F){
 }
 
 
-get_weights_solnp <- function(pred, observed, make_sparse = TRUE, 
+get_weights_solnp <- function(pred, observed, outcome_type, make_sparse = TRUE, 
                               convex_combination = TRUE, init_0 = FALSE, 
                               tol = 1e-5){
-  
-  risk <- function(alphas) {
-    preds <- pred %*% alphas
-    losses <- (preds - observed)^2
-    return(mean(losses))
+                              
+  if(outcome_type$type %in% c("constant", "binomial")){
+    risk <- function(alphas) {
+      preds <- plogis(trim_logit(pred) %*% alphas)
+      losses <- (-1 * ifelse(observed == 1, log(bound(preds)), log(1 - bound(preds))))
+      return(mean(losses))
+    }
+  } else if (outcome_type$type == "continuous"){
+    risk <- function(alphas) {
+      preds <- pred %*% alphas
+      losses <- (observed - preds)^2
+      return(mean(losses))
+    }
   }
   
   if (convex_combination) {
@@ -57,7 +65,7 @@ get_weights_solnp <- function(pred, observed, make_sparse = TRUE,
   return(as.numeric(coefs))
 }
 ################################################################################
-sl_weights_fit <- function(pred, obs){
+sl_weights_fit <- function(pred, obs, outcome_type){
   
   # remove NA predictions, loss
   na_idx <- which(colSums(is.na(pred)) > 0)
@@ -71,8 +79,14 @@ sl_weights_fit <- function(pred, obs){
   # get sl weights
   weights_nnls_convex <- get_weights(pred_noNA, obs, discrete=F, convex=T)
   weights_nnls <- get_weights(pred_noNA, obs, discrete=F, convex=F)
-  weights_solnp_convex <- get_weights_solnp(as.matrix(pred_noNA), obs, convex_combination=T)
-  weights_solnp <- get_weights_solnp(as.matrix(pred_noNA), obs, convex_combination=F)
+  weights_solnp_convex <- get_weights_solnp(
+    pred = as.matrix(pred_noNA), observed = obs, convex_combination=T, 
+    outcome_type = outcome_type
+  )
+  weights_solnp <- get_weights_solnp(
+    as.matrix(pred_noNA),  observed = obs, convex_combination=F, 
+    outcome_type = outcome_type
+  )
   sl_weights <- suppressWarnings(rbind(weights_nnls_convex, weights_nnls,
                                        weights_solnp_convex, weights_solnp))
   
@@ -85,7 +99,7 @@ sl_weights_fit <- function(pred, obs){
   return(sl_weights[, colnames(pred)])
 }
 ################################################################################
-sl_weights_predict <- function(sl_weights, pred){
+sl_weights_predict <- function(sl_weights, pred, outcome_bounds){
   
   # ensure correspondence between weights and predictions
   cols <- colnames(pred)[which(colnames(pred) %in% colnames(sl_weights))]
@@ -109,22 +123,22 @@ sl_weights_predict <- function(sl_weights, pred){
   pred_solnp <- as.matrix(pred_noNA) %*% wts_noNA["weights_solnp",]
   sl_pred <- data.table::data.table(pred_nnls_convex, pred_nnls, 
                                     pred_solnp_convex, pred_solnp)
-  colnames(sl_pred) <- c("nnls_convexSL", "nnls_SL", "solnp_convexSL", "solnp_SL")
+  sl_pred <- data.table::data.table(apply(sl_pred, 2, bound, outcome_bounds))
+  colnames(sl_pred) <- c("nnls_convex", "nnls", "solnp_convex", "solnp")
   return(sl_pred)
 }
 
-################################################################################
 # we include pred, since oSL selected an SL wrt to those preds
 retain_sl_weights <- function(online_sl_name, learner_sl_weights, pred){
   
   # which metalearner did the online sl select
-  if(grepl("nnls_convexSL", online_sl_name)){
+  if(grepl("nnls_convex", online_sl_name)){
     online_sl_metalearner <- "weights_nnls_convex"
-  } else if (grepl("nnls_SL", online_sl_name)){
+  } else if (grepl("nnls", online_sl_name)){
     online_sl_metalearner <- "weights_nnls"
-  } else if (grepl("solnp_convexSL", online_sl_name)){
+  } else if (grepl("solnp_convex", online_sl_name)){
     online_sl_metalearner <- "weights_solnp_convex"
-  } else if (grepl("solnp_SL", online_sl_name)){
+  } else if (grepl("solnp", online_sl_name)){
     online_sl_metalearner <- "weights_solnp"
   }
   
@@ -145,7 +159,7 @@ retain_sl_weights <- function(online_sl_name, learner_sl_weights, pred){
 }
 
 ################################################################################
-osl_weights_predict <- function(osl_weights, pred){
+osl_weights_predict <- function(osl_weights, pred, outcome_bounds){
   
   # ensure correspondence between weights and predictions
   cols <- colnames(pred)[which(colnames(pred) %in% names(osl_weights))]
@@ -156,13 +170,31 @@ osl_weights_predict <- function(osl_weights, pred){
   na_idx <- which(colSums(is.na(pred)) > 0)
   if(length(na_idx) > 0){
     pred_noNA <- pred[,-na_idx,with=F]
-    wts_noNA <- osl_weights[,-na_idx]
+    wts_noNA <- osl_weights[-na_idx]
   } else {
     pred_noNA <- pred
     wts_noNA <- osl_weights
   }
   
   # use non-NA osl weights for prediction with osl
-  osl_pred <- as.numeric(as.matrix(pred_noNA) %*% wts_noNA)
-  return(osl_pred)
+  bound(as.numeric(as.matrix(pred_noNA) %*% wts_noNA), outcome_bounds)
 }
+
+# utility function
+bound <- function(preds, bounds = 0.001) {
+  lower <- bounds[[1]]
+  if (length(bounds) > 1) {
+    upper <- bounds[[2]]
+  } else {
+    upper <- 1 - lower
+  }
+  preds_bounded <- pmin(pmax(preds, lower), upper)
+  return(preds_bounded)
+}
+trim_logit <- function(x, trim = 1e-05) {
+  x[x < trim] <- trim
+  x[x > (1 - trim)] <- (1 - trim)
+  foo <- log(x / (1 - x))
+  return(foo)
+}
+
