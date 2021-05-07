@@ -1,51 +1,51 @@
-# if (grepl("savio2", Sys.info()["nodename"])) {
-#   .libPaths("/global/scratch/rachelvphillips/R")
-#   Sys.setenv(R_REMOTES_NO_ERRORS_FROM_WARNINGS="true")
-# }
-# 
-# ### read args
-# args <- R.utils::commandArgs(trailingOnly = TRUE, asValues = TRUE,
-#                              defaults = list(file = "history30.Rdata",
-#                                              outcome = "Y10"))
+######################## Fit historical stacks on Savio ########################
+.libPaths("/global/scratch/rachelvphillips/R")
+Sys.setenv(R_REMOTES_NO_ERRORS_FROM_WARNINGS="true")
+options("sl3.verbose" = TRUE)
+data_path <- "/global/scratch/rachelvphillips/symphony-data/"
 
-args <- list(file = "historical60_mean.Rdata", outcome = "Y10_lag5_mean")
+### read args
+args <- R.utils::commandArgs(T)
+print(args)
+outcome <- as.character(args[1])
+smooth_type <- as.character(args[2])
+
+outcome_type <- ifelse(grepl("AHE", outcome), "binomial", "continuous")
 
 ### load libraries, data, source
 library(data.table)
 library(origami)
 library(sl3)
-source(here::here("MIMICanalysis","sl3_setup.R"))
-# source(here::here("R", "setup.R"))
-options(sl3.verbose = FALSE)
 
-# prep
-sl3_debug_mode()
-stack <- make_historical_stack()
-# d <- load_and_prep_historical_data(args$file)
-load("~/Downloads/historical60_mean.Rdata")
-d <- historical
+source(here::here("MIMICanalysis", "sl3_setup.R"))
 
-covs <- get_covariates(d)
-rm(get_covariates)
-rm(make_historical_stack)
+historical_file <- paste0("historical_", smooth_type, ".Rdata")
+load(paste0(data_path, historical_file))
 
-# task
-task <- make_sl3_Task(data = d, outcome = args$outcome, id = "id", 
-                      covariates = covs)
-rm(d)
-rm(covs)
+### make learner stack 
+stack <- make_historical_stack(outcome_type)
 
-# train
+### make ML task
+covs <- get_covariates(historical)
+d <- data.table::copy(historical)
+d[, weights := 1/.N, by = id]
+d$normalized_weights <- d$weights/sum(d$weights)            
+task <- make_sl3_Task(data=d, outcome=outcome, id="id", covariates=covs,
+                      drop_missing_outcome=T, weights="normalized_weights")
+rm(list=c("historical", "get_covariates", "d", "covs", "make_historical_stack"))
+
+### train stack on task
 set.seed(715)
 t <- proc.time()
-fit <- suppressMessages(stack$train(task))
-rm(task)
-rm(stack)
-fit$is_trained
-fit$learner_fits[[1]]$learner_fits[[1]]$fit_object$selected
-proc.time() - t
+historical_fit <- stack$train(task)
+historical_fit$is_trained
+timer <- proc.time() - t
+print(timer)
 
-# save
-fit_name <- paste0(args$outcome, "_", args$file)
-fit_path <- paste0("/global/scratch/rachelvphillips/symphony-data/", fit_name)
-save(fit, file = fit_path, compress = TRUE)
+print(historical_fit$fit_object$learner_fits[[1]]$fit_object$selected)
+
+### save
+fit_path <- paste0(data_path, outcome, "_", historical_file)
+save(historical_fit, file=fit_path, compress=T)
+rm(list=c("task", "historical_fit"))
+sessionInfo()
