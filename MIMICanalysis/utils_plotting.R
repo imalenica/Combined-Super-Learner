@@ -182,3 +182,4 @@ trt_plot <- function(individual_data){
     facet_grid(rows = vars(variable)) +
     theme(text = element_text(size = 8))
 }
+
