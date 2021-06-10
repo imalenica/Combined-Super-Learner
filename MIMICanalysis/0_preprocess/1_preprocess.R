@@ -10,9 +10,9 @@ library(data.table)
 # outcome data : fix repeated measure data and identify/impute outliers
 ################################################################################
 
-load(here::here("Data", "infos_admission.RData"))
+load("~/Box/Data_Shared/infos_admission.RData")
 length(unique(infos_admission$subject_id)) # 32425
-numerics <- readRDS(here::here("Data", "numerics.rds"))
+numerics <- readRDS("~/Box/Data_Shared/numerics.rds")
 length(unique(numerics$id)) #1353
 
 ################ account for subjects with multiple hospital stays #############
@@ -266,7 +266,7 @@ num_dat <- num_dat[order(num_dat$subject_id, num_dat$icustay_id,
 # treatment data : incorporate to reflect minute of administration (not hour)
 ################################################################################
 
-load(here::here("Data", "sedation.RData"))
+load("~/Box/Data_Shared/sedation.RData")
 sedation <- dplyr::select(sedation, -c("itemid", "duration", "startrealtime"))
 sedation <- subset(sedation, sedation$icustay_id %in% num_dat$icustay_id)
 sedation <- sedation[complete.cases(sedation),]
@@ -276,7 +276,7 @@ sedation <- sedation[!duplicated(sedation[,c("icustay_id", "endtime")]),]
 sedation <- sedation[!duplicated(sedation[,c("icustay_id", "starttime")],
                                  fromLast = TRUE),]
 
-load(here::here("Data", "amine.RData"))
+load("~/Box/Data_Shared/amine.RData")
 amine <- dplyr::select(amine, -c("itemid", "duration", "startrealtime"))
 amine <- subset(amine, amine$icustay_id %in% num_dat$icustay_id)
 amine <- amine[complete.cases(amine),]
@@ -286,7 +286,7 @@ amine <- amine[!duplicated(amine[,c("icustay_id", "endtime")]),]
 amine <- amine[!duplicated(amine[,c("icustay_id", "starttime")],
                            fromLast = TRUE),]
 
-load(here::here("Data", "ventilation.RData"))
+load("~/Box/Data_Shared/ventilation.RData")
 ventilation <- dplyr::select(ventilation, -c("extubated", "selfextubated"))
 ventilation <- ventilation[complete.cases(ventilation),]
 ventilation <- ventilation %>% distinct()
@@ -454,7 +454,7 @@ dim(common)
 
 num_trt <- numerics_ventilation
 # prelim save just incase, since this takes forever to run all the way through
-save(num_trt, file = here::here("Data","num_trt.Rdata"), compress = TRUE)
+save(num_trt, file = "~/Box/Data_Shared/num_trt.Rdata", compress = TRUE)
 
 ################################################################################
 # covariate data : incorporate relevant covariates
@@ -499,12 +499,12 @@ length(unique(mimic$subject_id)) # 1057
 length(unique(mimic$icustay_id)) # 1085
 length(unique(mimic$id)) # 1162
 mimic <- droplevels(mimic)
-save(mimic, file = here::here("Data","mimic.Rdata"), compress = TRUE)
+save(mimic, file = "~/Box/Data_Shared/mimic_clean.Rdata", compress = TRUE)
 
 ################################################################################
 # smooth vitals data with lagged 5-minute medians
 ################################################################################
-load(file = here::here("Data","mimic.Rdata"))
+load("~/Box/Data_Shared/mimic_clean.Rdata")
 
 # carry last obs forward for gaps in min
 locf1 <- mimic %>%
@@ -617,15 +617,17 @@ d$icustay_id <- as.factor(as.character(d$icustay_id))
 # only retain non-smoothed outcomes
 rm <- colnames(d)[grepl("lag5_", colnames(d))]
 mimic <- d[,-rm,with = F]
-save(mimic, file=here("Data", "mimic.Rdata"), compress=T)
+save(mimic, file="~/Box/Data_Shared/mimic.Rdata", compress=T)
 
 ### smoothed Y
 lagged <- d[,-c("Y10","Y15","Y20","Y25","Y30","Y35","Y40","Y45"), with = F]
 # only retain smoothed mean outcomes
 rm <- colnames(lagged)[grepl("lag5_median", colnames(lagged))]
 mimic_smooth_mean <- lagged[,-rm,with = F]
-save(mimic_smooth_mean, file=here("Data", "mimic_smooth_mean.Rdata"), compress=T)
+save(mimic_smooth_mean, file="~/Box/Data_Shared/mimic_smooth_mean.Rdata",
+     compress=T)
 # only retain smoothed median outcomes
 rm <- colnames(lagged)[grepl("lag5_mean", colnames(lagged))]
 mimic_smooth_median <- lagged[,-rm,with = F]
-save(mimic_smooth_median, file=here("Data", "mimic_smooth_median.Rdata"), compress=T)
+save(mimic_smooth_median, file="~/Box/Data_Shared/mimic_smooth_median.Rdata",
+     compress=T)
