@@ -57,7 +57,9 @@ get_alarm_performance <- function(outcome, id){
       }
     })
     na_idx <- unique(unlist(na_idx[!sapply(na_idx, is.null)]))
-    true_alarm_idx <- ifelse(length(na_idx) > 0, true_alarm_idx[-na_idx], true_alarm_idx)
+    if(length(na_idx) > 0){
+      true_alarm_idx <- true_alarm_idx[-na_idx]
+    }
     true_alarm_obs_binary <- rep(0, length(obs))
 
     if(length(true_alarm_idx) > 0){
@@ -90,39 +92,30 @@ get_alarm_performance <- function(outcome, id){
             }
           })
           na_idx <- unique(unlist(na_idx[!sapply(na_idx, is.null)]))
-          alarm_idx <- ifelse(length(na_idx) > 0, alarm_idx[-na_idx], alarm_idx)
+          if(length(na_idx) > 0){
+            alarm_idx <- alarm_idx[-na_idx]
+          }
           if(length(alarm_idx) >= 1){
             pred_binary[alarm_idx] <- 1
-            alarm_pred_binary <- rep(1, length(alarm_idx))
-            alarm_obs_binary <- ifelse(obs[alarm_idx] <= 65, 1, 0)
-            if(length(unique(alarm_obs_binary)) > 1){
-              obj <- ROCR::prediction(alarm_pred_binary, alarm_obs_binary)
-              mat[1,j] <- as.numeric(ROCR::performance(obj, "auc")@y.values)
-              mat[2,j] <- as.numeric(ROCR::performance(obj, "aucpr")@y.values)
-            } else {
-              if(sum(alarm_obs_binary) == length(alarm_obs_binary)){
-                mat[1,j] <- mat[2,j] <- 1
-              } else {
-                mat[1,j] <- mat[2,j] <- 0
-              }
-            }
-          } else {
-            mat[1,j] <- mat[2,j] <- 0
           }
-        } else {
-          mat[1,j] <- mat[2,j] <- 0
         }
-
-        obj <- ROCR::prediction(pred_binary, true_alarm_obs_binary)
-        mat[3,j] <- as.numeric(ROCR::performance(obj, "auc")@y.values)
-        mat[4,j] <- as.numeric(ROCR::performance(obj, "aucpr")@y.values)
+        tp <- sum(which(pred_binary == 1) %in% which(true_alarm_obs_binary == 1))
+        fp <- sum(!which(pred_binary == 1) %in% which(true_alarm_obs_binary == 1))
+        tn <- sum(which(pred_binary == 0) %in% which(true_alarm_obs_binary == 0))
+        fn <- sum(!which(pred_binary == 0) %in% which(true_alarm_obs_binary == 0))
+        mat[1,j] <- recall <- sensitivity <- tpr <- tp / (tp + fn)
+        specificity <- fpr <- tn / (tn + fp)
+        mat[2,j] <- precision <- ppv <- tp / (tp + fp)
+        misclassification <- (fn + fp) / (tn + fp + fn + tp)
+        mat[3,j] <- accuracy <- 1 - misclassification
+        mat[4,j] <- f1 <- 2 / ((1/ppv) + (1/tpr))
       }
       colnames(mat) <- learners
 
       return(cbind(
         "id" = rep(id, 4), "horizon" = rep(horizon, 4),
         "smooth_type" = rep(smooth_type, 4),
-        "metric" = c("AUC_event", "AUCPR_event", "AUC_alarm", "AUCPR_alarm"),
+        "metric" = c("TPR", "PPV", "Accuracy", "F1score"),
         data.table(mat)
       ))
     } else {
@@ -163,8 +156,7 @@ result <- lapply(horizons, function(horizon){
 })
 
 result_summary <- do.call(rbind, lapply(result, '[[', 'result_summary'))
-metric_levels <- c("AUCPR_event","AUC_event", "AUCPR_alarm", "AUC_alarm")
-result_summary[, metric := factor(metric, levels = metric_levels)]
+result_summary[, metric := factor(metric)]
 setorder(result_summary, metric, horizon, smooth_type)
 write.csv(result_summary, file = paste0(results_path, "alarm_allID.csv"),
           row.names = FALSE)
@@ -176,4 +168,4 @@ lapply(seq_along(result), function(x){
   addWorksheet(wb, paste0("horizon", names(result)[x]))
   writeDataTable(wb, paste0("horizon", names(result)[x]), result[[x]])
 })
-saveWorkbook(wb, file = paste0(results_path, "alarm_byID.xlsx"))
+saveWorkbook(wb, file = paste0(results_path, "alarm_byID.xlsx"), overwrite = T)
