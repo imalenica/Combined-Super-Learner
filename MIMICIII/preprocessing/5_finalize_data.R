@@ -12,7 +12,7 @@ covariates <- c(
   "HEIGHT", "WEIGHT", "BMI", "AGE", "INSURANCE_PRIV", "SEX_M",
   "ETHNICITY_WHITE", "ETHNICITY_NONWHITE", "FIRST_CAREUNIT_TSICU",
   "FIRST_CAREUNIT_SICU", "FIRST_CAREUNIT_MICU", "FIRST_CAREUNIT_CSRU",
-  "minute", "MAP_longest_flat_spot", "MAP_min",
+  "MAP_longest_flat_spot", "MAP_min",
   "MAP_Q1", "MAP_median", "MAP_mean", "MAP_Q3", "MAP_max", "MAP_NA",
   "HR_median", "HR_mean", "HR_NA", "PULSE_median", "PULSE_mean",
   "PULSE_NA", "SYS_median", "SYS_mean", "SYS_NA", "DIAS_median",
@@ -57,7 +57,7 @@ for(i in 1:nrow(patients_keep_final)){
     box, "MIMIC-III/output/patients/", patient_i$SUBJECT_ID, "_",
     patient_i$ICUSTAY_ID, ".Rdata"
   ))
-  data_i <- data_i[, c("SUBJECT_ID", "ICUSTAY_ID", covariates), with = F]
+  data_i <- data_i[, c("SUBJECT_ID", "ICUSTAY_ID", "minute", covariates), with=F]
   data_i[, Y := shift(MAP_median, n = 5, type = "lag")]
   data_i <- data_i[-c(1:14), ]
   any_na_list[[i]] <- any(colSums(is.na(data_i)) > 0)
@@ -69,12 +69,28 @@ for(i in 1:nrow(patients_keep_final)){
 }
 any(any_na_list == TRUE)
 
-
-if(i %in% half1){
-  half1_data_list[[i]] <- data_i
-} else {
-  half2_data_list[[i]] <- data_i
-}
-half1_data <- do.call(rbind, half1_data_list)
-half2_data <- do.call(rbind, half1_data_list)
-
+# split subjects in half
+set.seed(9528)
+half1 <- sample(1:nrow(patients_keep_final), nrow(patients_keep_final)/2)
+half2 <- seq(1:nrow(patients_keep_final))[-half1]
+any(half1 %in% half2)
+dput(as.numeric(half1))
+c(50, 199, 48, 162, 66, 79, 93, 51, 184, 21, 196, 170, 23, 203,
+  28, 152, 47, 1, 62, 99, 59, 60, 78, 149, 132, 14, 177, 68, 43,
+  158, 84, 165, 88, 70, 151, 87, 166, 141, 56, 154, 16, 212, 115,
+  91, 213, 181, 7, 37, 127, 26, 178, 33, 123, 32, 111, 126, 195,
+  135, 117, 211, 94, 188, 133, 80, 194, 221, 143, 224, 5, 12, 98,
+  138, 96, 57, 210, 3, 121, 171, 69, 164, 128, 217, 58, 142, 228,
+  52, 40, 82, 49, 54, 53, 95, 144, 226, 153, 4, 22, 169, 76, 27,
+  119, 6, 108, 218, 72, 175, 134, 145, 225, 61, 125, 187, 120,
+  202, 85)
+dput(as.numeric(half2))
+c(2, 8, 9, 10, 11, 13, 15, 17, 18, 19, 20, 24, 25, 29, 30, 31,
+  34, 35, 36, 38, 39, 41, 42, 44, 45, 46, 55, 63, 64, 65, 67, 71,
+  73, 74, 75, 77, 81, 83, 86, 89, 90, 92, 97, 100, 101, 102, 103,
+  104, 105, 106, 107, 109, 110, 112, 113, 114, 116, 118, 122, 124,
+  129, 130, 131, 136, 137, 139, 140, 146, 147, 148, 150, 155, 156,
+  157, 159, 160, 161, 163, 167, 168, 172, 173, 174, 176, 179, 180,
+  182, 183, 185, 186, 189, 190, 191, 192, 193, 197, 198, 200, 201,
+  204, 205, 206, 207, 208, 209, 214, 215, 216, 219, 220, 222, 223,
+  227, 229, 230)
