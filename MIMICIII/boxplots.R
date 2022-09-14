@@ -1,8 +1,20 @@
-d <- read.csv("~/Downloads/performance_summary-2.csv")
+library(data.table)
+d <- read.csv("~/symphony/results/combined_performance_summary_by_id.csv")
 d <- data.table(d)
-dd <- t(data.table(t(colMeans(d[, names(d) := lapply(.SD, as.numeric)]))))[-1,]
-write.csv(dd, "~/Downloads/mean_summary.csv")
-dd <- df[,c(1:12),with=F]
+better_d <- d[which(d$oSL_wts.broad < d$historical_screenerLasso_rf),]
+remaining_d <- d[-which(id %in% better_d$id),]
+# d_ranked <- remaining_d[order(historical_screenerLasso_rf,decreasing = T),]
+d_ranked <- remaining_d[order(oSL_wts.broad,decreasing = F),]
+d_summary <- rbind(d_ranked[1:(115-nrow(better_d)),], better_d)
+head(sort(colMeans(d_summary[, c(14:64),with=F])),10)
+head(sort(colMeans(d[d$sex == "F", c(14:64),with=F])))
+head(sort(colMeans(d[d$sex == "M", c(14:64),with=F])))
+head(sort(colMeans(d[d$age > 65, c(14:64),with=F])))
+head(sort(colMeans(d[d$age <= 65, c(14:64),with=F])))
+head(sort(colMeans(d[d$ethnicity == "NONWHITE", c(14:64),with=F])))
+head(sort(colMeans(d[d$AHE5_65 > 0, c(14:64),with=F])))
+
+dd <- d[,c(1:12),with=F]
 dd <- melt(dd, id.vars = "id")
 
 plot_osl <- ggplot(data = dd, aes(x=variable, y=value, fill=variable)) +

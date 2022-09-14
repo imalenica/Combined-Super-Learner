@@ -1,0 +1,32 @@
+"learner","MSE_mean","MSE_median","MSE_variance","MSE_min","MSE_max"
+"Historical Offline Screener + RF",5.62,4.9,15.11,1.18,34.47
+"Personalized Online Super Learner (POSL)",5.78,5.47,13.21,1.29,33.78
+"Historical Offline RF",5.92,5.17,14.51,1.25,33.49
+"NNLS Ensemble Online SL",6.17,5.7,14.91,1.27,34.65
+"Weighted NNLS Ensemble Online SL",6.17,5.66,15,1.29,34.78
+"Historical Offline Lasso",7.56,6.76,19.53,1.75,37.66
+"Historical Offline Bayesian GLM",7.58,6.87,19.52,1.71,37.99
+"Historical Offline Linear Model",7.58,6.87,19.52,1.71,37.99
+"Historical Offline Elastic Net",7.6,6.76,19.66,1.95,37.94
+"Historical Offline Screener + Ridge",7.94,6.91,20.04,2,34.18
+"Historical Offline Ridge",7.99,6.67,21.4,2.14,36.03
+"Historical Offline Screener + Elastic Net",8,6.99,20.1,1.97,37.83
+"Historical Offline Screener + Lasso",8.01,6.74,21.62,2.05,37.46
+"Historical Offline MARS",8.14,6.76,22.25,2.21,36.56
+"Historical Offline Screener + Bayesian GLM",8.14,6.76,22.25,2.21,36.56
+"Historical Offline Screener + GLM",8.16,6.58,55.33,2.24,64.07
+"Historical Offline Screener + MARS",8.58,7.01,32.26,2.5,37.08
+"Individual Online RF",11.24,9.27,107.33,2.11,107.42
+"Individual Online ARIMA",14.07,8.95,172.05,1.16,78.92
+"Individual Online Ridge",16.98,11.19,247.38,2.01,95.03
+"Individual Online Lasso",19.21,13.16,297.91,2.88,94.13
+"Individual Online Elastic Net",19.79,13.44,314,3.12,93.89
+"Individual Online Bayesian GLM",20.42,13.44,340.49,1.24,98.94
+"Individual Online GLM",21.22,14.27,359.59,2.33,99.12
+"Convex NNLS Ensemble Online SL",22.56,17.41,347.15,3.17,127.02
+"Convex Weighted NNLS Ensemble Online SL",22.56,17.38,348.08,3.17,127.26
+"Individual Online NLTS",40.53,35.71,463.14,9.82,164.93
+"Individual Online MARS",54.1,44.99,1540.1,7.54,225.12
+"Individual Online Mean",63.02,54.36,1246.15,14.3,214.57
+"Historical Offline BART",6408.52,6539.05,2823390.42,1965.75,10275.25
+"Historical Offline Screener + BART",6408.52,6539.05,2823390.42,1965.75,10275.25
